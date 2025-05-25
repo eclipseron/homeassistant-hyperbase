@@ -1,0 +1,15 @@
+{
+  "title": "Hyperbase Configuration",
+  "config": {
+    "step": {
+      "connect": {
+        "title": "Connect",
+        "description": "Enter hyperbase server information.",
+        "data": {
+          "host": "Host",
+          "port": "Port"
+        }
+      }
+    }
+  }
+}
