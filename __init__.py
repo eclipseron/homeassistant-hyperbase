@@ -10,52 +10,78 @@ configuration.yaml file.
 
 hello_world:
 """
-from __future__ import annotations
+
 import asyncio
+import errno
 import json
-import random
-
-from paho.mqtt.enums import CallbackAPIVersion
-
-from homeassistant.const import EVENT_SERVICE_REGISTERED
+from typing import Optional
+from paho.mqtt.enums import CallbackAPIVersion, MQTTErrorCode, MQTTProtocolVersion
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.typing import ConfigType
-from paho.mqtt import client, properties
+from homeassistant.exceptions import HomeAssistantError
+from paho.mqtt import client as mqtt
+from .const import CONF_MQTT_ADDRESS, CONF_MQTT_PORT, CONF_MQTT_TOPIC, DOMAIN, LOGGER
 
-from .const import DOMAIN
-import logging
+class HyperbaseMQTTConnection:
+    client: mqtt.Client
+    """MQTT connection for Hyperbase"""
+    def __init__(self, host: str, port: int, topic: str):
+        self.client = mqtt.Client(CallbackAPIVersion.VERSION2, protocol=MQTTProtocolVersion.MQTTv5)
+        self.host = host
+        self.port = port
+        self.topic = topic
+        self.client.on_publish = self.on_publish
 
-_LOGGER = logging.getLogger(__name__)
-
-# The domain of your component. Should be equal to the name of your component.
+    async def async_publish(self, payload: Optional[str] = None):
+        for i in range(10):
+            self.client.publish(self.topic, json.dumps({"message": "test"}))
+            await asyncio.sleep(1)
+    
+    def connect(self):
+        status = self.client.connect(self.host, self.port)
+        if status != MQTTErrorCode.MQTT_ERR_SUCCESS:
+            raise HyperbaseMQTTConnectionError(f"Failed to connect to MQTT broker at {self.host}:{self.port}, error code: {status}")
+    
+    def disconnect(self):
+        self.client.disconnect()
+    
+    def on_publish(self, client, userdata, mid, reason_code, properties):
+        """Callback for when a message is published."""
+        LOGGER.info(f"Message published with mid: {mid}, reason code: {reason_code}")
+        if reason_code != mqtt.MQTT_ERR_SUCCESS:
+            LOGGER.error(f"Failed to publish message, reason code: {reason_code}")
+        else:
+            LOGGER.info("Message published successfully")
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry
 ) -> bool:
-    """Set up platform from a ConfigEntry."""
-    # hass.data.setdefault(DOMAIN, {})
-    # hass.data[DOMAIN][entry.entry_id] = entry.data
-    # mq = client.Client(CallbackAPIVersion.VERSION2, "ar_hass", transport="websockets")
-    # mq.ws_set_options(path="/mqtt")
-    # mq.connect("10.42.28.70", 8083)
-    # for i in range(20):
-    #     data = {
-    #         "project_id": "0196a9e5-b702-7e20-b9ef-c6fa4bbce49a",
-    #         "token_id": "0196a9e5-bc75-7902-b44d-a64cbdd53074",
-    #         "collection_id": "0196d83f-2ee2-7e41-a56f-c76731636a6d", # sensor
-    #         "data": {
-    #             "instance_id": "device-plug-b1",
-    #             "entitiy_id": "sensor.plug_b1_voltage",
-    #             "state": float(random.randint(2200,2290)) / 10,
-    #         }
-    #     }
-    #     mq.publish("hyperbase-pg", json.dumps(data))
-    #     _LOGGER.info("ping to hyperbase")
+    """Setup Hyperbase connection from config entry"""
+    mq = HyperbaseMQTTConnection(
+        host=entry.data[CONF_MQTT_ADDRESS],
+        port=entry.data[CONF_MQTT_PORT],
+        topic=entry.data[CONF_MQTT_TOPIC]
+    )
+    await hass.async_add_executor_job(mq.connect)
+    
     return True
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     hass.data.setdefault(DOMAIN, {})
-    hass.services.async_services_for_domain("tuya")
+    entry = hass.config_entries.async_entries(DOMAIN)
+    # LOGGER.info(entry)
+    
+    # mq = HyperbaseMQTTConnection(
+    #     host=entry[0].data[CONF_MQTT_ADDRESS],
+    #     port=entry[0].data[CONF_MQTT_PORT],
+    #     topic=entry[0].data[CONF_MQTT_TOPIC]
+    # )
+    # mq.connect()
+    # await mq.publish()
     return True
+
+
+class HyperbaseMQTTConnectionError(HomeAssistantError):
+    """Error to indicate a Hyperbase MQTT connection error."""
