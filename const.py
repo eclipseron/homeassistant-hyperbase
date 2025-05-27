@@ -1,9 +1,17 @@
 
 import logging
 
+from homeassistant.loader import MQTT
+from homeassistant.util.hass_dict import HassKey
+
+
+class HyperbaseConfig:
+    config: dict[str, str] = {}
 
 DOMAIN="hyperbase"
 LOGGER = logging.getLogger(__package__)
+
+HYPERBASE_CONFIG: HassKey[HyperbaseConfig] = HassKey(DOMAIN)
 
 CONF_BASE_URL = "base_url"
 CONF_MQTT_ADDRESS = "mqtt_address"
@@ -22,3 +30,6 @@ HYPERBASE_RESPONSE_CODE = "code"
 HYPERBASE_RESPONSE_MSG = "msg"
 HYPERBASE_RESPONSE_SUCCESS = "success"
 HYPERBASE_RESPONSE_TOKEN = "token"
+
+MQTT_CONNECTED = "hyperbase_mqtt_connected"
+MQTT_DISCONNECTED = "hyperbase_mqtt_disconnected"
