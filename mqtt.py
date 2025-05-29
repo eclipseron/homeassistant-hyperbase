@@ -3,6 +3,8 @@ from homeassistant.core import HomeAssistant
 from paho.mqtt import client as mqtt
 import asyncio
 
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import dispatcher_send
 from .exceptions import HyperbaseMQTTConnectionError
 

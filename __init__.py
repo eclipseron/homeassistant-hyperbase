@@ -14,8 +14,9 @@ hello_world:
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.typing import ConfigType
-from .const import CONF_MQTT_ADDRESS, CONF_MQTT_PORT, CONF_MQTT_TOPIC, CONF_PROJECT_NAME, DOMAIN, HYPERBASE_CONFIG, LOGGER
-from .common import HyperbaseCoordinator
+from homeassistant.helpers.start import async_at_start
+from .const import CONF_MQTT_ADDRESS, CONF_MQTT_PORT, CONF_MQTT_TOPIC, CONF_PROJECT_ID, CONF_PROJECT_NAME, DOMAIN, HYPERBASE_CONFIG, LOGGER
+from .common import HyperbaseCoordinator, HyperbaseProjectManager
 from .exceptions import HyperbaseMQTTConnectionError
 
 
@@ -30,6 +31,12 @@ async def async_setup_entry(
     mqtt_port = entry.data[CONF_MQTT_PORT]
     mqtt_topic = entry.data[CONF_MQTT_TOPIC]
     project_name = entry.data[CONF_PROJECT_NAME]
+    
+    project_config = HyperbaseProjectManager(
+        hass,
+        entry.data[CONF_PROJECT_ID],
+    )
+    # await project_config.async_revalidate_collections()
     
     entry.runtime_data = HyperbaseCoordinator(
         hass,

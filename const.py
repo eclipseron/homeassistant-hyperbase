@@ -23,6 +23,7 @@ CONF_PROJECT_NAME = "project_name"
 CONF_REST_ADDRESS = "rest_address"
 CONF_REST_PORT = "rest_port"
 CONF_REST_PROTOCOL = "rest_protocol"
+CONF_REST_TOKEN = "token"
 
 HYPERBASE_AUTH_ENDPOINT = "/api/rest/auth/password-based"
 
