@@ -82,7 +82,7 @@ class MQTT:
         Function called when the client connected to the broker.
         """
         if result_code != mqtt.CONNACK_ACCEPTED:
-            return
+            return result_code
         self.connected = True
         dispatcher_send(self.hass, MQTT_CONNECTED)
 

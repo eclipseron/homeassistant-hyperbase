@@ -15,7 +15,13 @@
     },
     "error": {
       "invalid_auth": "[%key:common::config_flow::error::invalid_auth%]",
-      "login_error": "Login error ({code}): {msg}"
+      "login_error": "Login failed ({code}): {msg}",
+      "network_error": "({network_type}) Failed to connect: {msg}",
+      "project_error": "Failed to configure project ({code}): {msg}",
+      "token_error": "Failed to verify token ({code}): {msg}"
+    },
+    "abort": {
+      "already_configured": "[%key:common::config_flow::abort::already_configured_device%]"
     }
   }
 }

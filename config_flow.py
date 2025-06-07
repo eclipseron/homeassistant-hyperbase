@@ -1,11 +1,15 @@
 import datetime
 from typing import Any, Dict, Optional
 import httpx
+from paho.mqtt.enums import CallbackAPIVersion, MQTTProtocolVersion
+
+from .exceptions import HyperbaseHTTPError, HyperbaseMQTTConnectionError, HyperbaseRESTConnectivityError
 
 from .common import ListenedDeviceEntry
 from homeassistant.helpers import selector
 from homeassistant.helpers.device_registry import async_get as async_get_device_registry
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry, async_entries_for_device
+from paho.mqtt import client as mqtt
 
 from homeassistant import config_entries
 from homeassistant.core import callback
@@ -37,42 +41,97 @@ from .const import (
     HYPERBASE_RESPONSE_TOKEN
 )
 
-def login(username: str, password: str, base_url: str="http://localhost:8080"):
+def login(email: str, password: str, base_url: str="http://localhost:8080"):
     try:
         client = httpx.Client()
         r = client.post(f"{base_url}/api/rest/auth/password-based",
-                                json={"email": username, "password": password})
+                                json={"email": email, "password": password})
         r.raise_for_status()
-        return {"success": True, "token": r.json()["data"]["token"]}
-    except httpx.ConnectTimeout as exc:
-        return {"success": False, "code": 0, "msg": f"Connection to host timed out"}
-    except httpx.ConnectError as exc:
-        return {"success": False, "code": 0, "msg": f"Failed to connect to host"}
+        return r.json()["data"]["token"]
+    except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
+        LOGGER.error(exc)
+        raise HyperbaseRESTConnectivityError(exc.args)
     except httpx.HTTPStatusError as exc:
-        return {"success": False, "code": exc.response.status_code, "msg": exc.response.json()['error']['status']}
+        raise HyperbaseHTTPError(exc.response.json()['error']['status'], status_code=exc.response.status_code)
 
 
-def get_hyperbase_project(project_id:str, token:str, base_url: str="http://localhost:8080"):
+def get_hyperbase_project(project_id:str, auth_token:str, base_url: str="http://localhost:8080"):
     try:
         client = httpx.Client()
-        client.headers.update({"Authorization": f"Bearer {token}"})
+        client.headers.update({"Authorization": f"Bearer {auth_token}"})
         r = client.get(f"{base_url}/api/rest/project/{project_id}")
         r.raise_for_status()
-        return {"success": True, "data": r.json()["data"]}
-    except httpx.ConnectError as exc:
-        return {"success": False, "code": 0, "msg": f"Failed to connect to host"}
-    except httpx.ConnectTimeout as exc:
-        return {"success": False, "code": 0, "msg": f"Connection to host timed out"}
+        return r.json()["data"]
+    except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
+        LOGGER.error(exc)
+        raise HyperbaseRESTConnectivityError(exc.args)
     except httpx.HTTPStatusError as exc:
-        return {"success": False, "code": exc.response.status_code, "msg": exc.response.json()['error']['status']}
+        raise HyperbaseHTTPError(exc.response.json()['error']['status'], status_code=exc.response.status_code)
 
 
+def validate_api_token(project_id: str, token_id: str, auth_token:str, base_url: str="http://localhost:8080"):
+    try:
+        client = httpx.Client()
+        client.headers.update({"Authorization": f"Bearer {auth_token}"})
+        r = client.get(f"{base_url}/api/rest/project/{project_id}/token/{token_id}")
+        r.raise_for_status()
+    except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
+        LOGGER.error(exc)
+        raise HyperbaseRESTConnectivityError(exc.args)
+    except httpx.HTTPStatusError as exc:
+        raise HyperbaseHTTPError(exc.response.json()['error']['status'], status_code=exc.response.status_code)
+
+
+def ping_rest_server(base_url: str):
+    try:
+        client = httpx.Client()
+        _ = client.get(base_url)
+        return {"success": True}
+    except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
+        LOGGER.error(exc)
+        raise HyperbaseRESTConnectivityError(exc.args)
+
+
+def ping_mqtt_server(host:str, port:int, topic: str):
+    
+    def _on_connect_callback(_mqttc: mqtt.Client, _userdata, _flags, result_code: int, properties):
+        if result_code != mqtt.CONNACK_ACCEPTED:
+            return result_code
+        _mqttc.publish(topic, payload="ping")
+    
+    def _on_publish_callback(_mqttc: mqtt.Client, userdata, mid, reason_code, properties):
+        LOGGER.info("ping sent")
+        _mqttc.disconnect()
+        _mqttc.loop_stop()
+    
+    def _on_disconnect_callback(client, userdata, disconnect_flags, reason_code, properties):
+        LOGGER.info(f"MQTT client disconnected ({reason_code})")
+    
+    mqttc = mqtt.Client(
+            callback_api_version=CallbackAPIVersion.VERSION2,
+            client_id="hass",
+            protocol=MQTTProtocolVersion.MQTTv5
+        )
+    mqttc.on_connect = _on_connect_callback
+    mqttc.on_publish = _on_publish_callback
+    mqttc.on_disconnect = _on_disconnect_callback
+    
+    connect_result = None
+    try:
+        connect_result = mqttc.connect(host, port)
+    except OSError as exc:
+        LOGGER.error(exc)
+        raise HyperbaseMQTTConnectionError(exc.args)
+    
+    if connect_result is not None and connect_result != 0:
+        raise HyperbaseMQTTConnectionError(mqtt.error_string(connect_result))
+    
+    mqttc.loop_start()
 
 class HyperbaseConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    __network_rest_address: str
-    __network_base_url: str
-    __auth_token: str
-    __project_config: Dict[str, Any]
+    __auth_token: str = ""
+    __project_config: dict[str, Any] = {}
+    __network_config: dict[str, Any] = {}
     
     @staticmethod
     @callback
@@ -81,103 +140,161 @@ class HyperbaseConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return HyperbaseOptionsFlowHandler()
     
     
-    async def async_step_user(self, user_input: dict[str, Any] | None = None):
+    async def async_step_user(self, user_input: Optional[dict[str, Any]] = None):
         """Step for creating new hyperbase connection"""
         errors = {}
         placeholders = {}
         if user_input is not None:
-            base_url = f"{user_input[CONF_REST_PROTOCOL]}://{user_input[CONF_REST_ADDRESS]}:{user_input[CONF_REST_PORT]}"
-            success, res =  await self.__async_login(
-                user_input[CONF_EMAIL],
-                user_input[CONF_PASSWORD],
-                base_url,
-            )
-            if success:
-                self.__network_rest_address = user_input[CONF_REST_ADDRESS]
-                self.__network_base_url = base_url
-                return await self.async_step_configure_project()
-            errors["base"] = "login_error"
-            placeholders = {
-                HYPERBASE_RESPONSE_CODE: res[HYPERBASE_RESPONSE_CODE],
-                HYPERBASE_RESPONSE_MSG: res[HYPERBASE_RESPONSE_MSG],
-            }
+            base_url = user_input.get(CONF_REST_ADDRESS)
+            try: 
+                await self.hass.async_add_executor_job(ping_rest_server, base_url)
+                await self.hass.async_add_executor_job(ping_mqtt_server,
+                    user_input.get(CONF_MQTT_ADDRESS),
+                    user_input.get(CONF_MQTT_PORT),
+                    user_input.get(CONF_MQTT_TOPIC)
+                )
+                self.__network_config = {
+                    CONF_BASE_URL: base_url,
+                    CONF_MQTT_ADDRESS: user_input.get(CONF_MQTT_ADDRESS),
+                    CONF_MQTT_PORT: user_input.get(CONF_MQTT_PORT),
+                    CONF_MQTT_TOPIC: user_input.get(CONF_MQTT_TOPIC)
+                }
+                return await self.async_step_login()
+            except HyperbaseRESTConnectivityError as exc:
+                placeholders = {
+                    HYPERBASE_RESPONSE_MSG: exc.args,
+                    "network_type": "REST"
+                }
+            except HyperbaseMQTTConnectionError as exc:
+                placeholders = {
+                    HYPERBASE_RESPONSE_MSG: exc.args,
+                    "network_type": "MQTT"
+                }
+            errors["base"] = "network_error"
+            
         else:
             user_input = {}
         
         return self.async_show_form(
             step_id="user", data_schema=vol.Schema(
             {
-                vol.Required(CONF_REST_ADDRESS, description="Hyperbase Backend Host", default=user_input.get(CONF_REST_ADDRESS, "localhost")): str,
-                vol.Required(CONF_REST_PROTOCOL, description="Hyperbase REST Protocol", default=user_input.get(CONF_REST_PROTOCOL, "http")): vol.In(cv.EXTERNAL_URL_PROTOCOL_SCHEMA_LIST),
-                vol.Required(CONF_REST_PORT, description="Hyperbase Backend REST Port", default=user_input.get(CONF_REST_PORT, 8080)): cv.port,
-                vol.Required(CONF_EMAIL, description="Hyperbase email", default=""): str,
-                vol.Required(CONF_PASSWORD, description="Hyperbase password", default=""): str,
+                vol.Required(CONF_REST_ADDRESS, description="Hyperbase Backend Host", default=user_input.get(CONF_REST_ADDRESS, "http://localhost:8080")): str,
+                vol.Required(CONF_MQTT_ADDRESS, description="MQTT Broker Address", default=user_input.get(CONF_MQTT_ADDRESS, "localhost")): str,
+                vol.Required(CONF_MQTT_PORT, description="MQTT Broker Port", default=user_input.get(CONF_MQTT_PORT, 1883)): cv.port,
+                vol.Required(CONF_MQTT_TOPIC, description="MQTT Topic to publish", default=user_input.get(CONF_MQTT_TOPIC, "hyperbase")): str
             }),
             errors=errors,
             description_placeholders=placeholders,
         )
     
     
-    async def async_step_setup_mqtt(self, user_input: Optional[Dict[str, Any]] = None):
-        """Step to config MQTT connection to Hyperbase"""
-        errors = {}
-        if user_input is not None:
-            return self.async_create_entry(
-                    title=self.__project_config[CONF_PROJECT_NAME],
-                    data={
-                        CONF_BASE_URL: self.__network_base_url,
-                        CONF_MQTT_ADDRESS: user_input[CONF_MQTT_ADDRESS],
-                        CONF_MQTT_PORT: user_input[CONF_MQTT_PORT],
-                        CONF_MQTT_TOPIC: user_input[CONF_MQTT_TOPIC],
-                        CONF_TOKEN: self.__auth_token,
-                        CONF_PROJECT_ID: self.__project_config[CONF_PROJECT_ID],
-                        CONF_PROJECT_NAME: self.__project_config[CONF_PROJECT_NAME],
-                        },
-                    description=f"Project ID: {self.__project_config[CONF_PROJECT_NAME]}",
-                )
-        else:
-            user_input = {}
-        
-        return self.async_show_form(
-            step_id="setup_mqtt", data_schema=vol.Schema(
-            {
-                vol.Required(CONF_MQTT_ADDRESS, description="Hyperbase Backend Host", default=user_input.get(CONF_MQTT_ADDRESS, self.__network_rest_address)): str,
-                vol.Required(CONF_MQTT_PORT, description="Hyperbase MQTT Port", default=user_input.get(CONF_MQTT_PORT, 1883)): cv.port,
-                vol.Required(CONF_MQTT_TOPIC, description="Hyperbase MQTT Topic", default=user_input.get(CONF_MQTT_TOPIC, "hyperbase")): str,
-            }),
-            errors=errors
-        )
-    
-    
-    async def async_step_configure_project(self, user_input: Optional[Dict[str, Any]] = None):
+    async def async_step_login(self, user_input: Optional[Dict[str, Any]] = None):
         """Step to specify target project ID to collect data into Hyperbase"""
         errors = {}
+        placeholders = {}
         if user_input is not None:
-            success, res = await self.__async_get_project(
-                user_input.get(CONF_PROJECT_ID),
-                self.__auth_token,
-                self.__network_base_url,
-            )
-            if success:
+            _login_success = False
+            try:
+                self.__auth_token = await self.hass.async_add_executor_job(login,
+                    user_input.get(CONF_EMAIL), user_input.get(CONF_PASSWORD),
+                    self.__network_config.get(CONF_BASE_URL))
+                _login_success = True
+                project = await self.hass.async_add_executor_job(get_hyperbase_project,
+                    user_input.get(CONF_PROJECT_ID),
+                    self.__auth_token,
+                    self.__network_config.get(CONF_BASE_URL)
+                )
+                self.__project_config = {
+                    CONF_PROJECT_ID: user_input.get(CONF_PROJECT_ID),
+                    CONF_PROJECT_NAME: project.get(CONF_NAME)
+                }
                 await self.async_set_unique_id(user_input.get(CONF_PROJECT_ID))
                 self._abort_if_unique_id_configured()
-                return await self.async_step_setup_mqtt()
-            
-            if res.get(HYPERBASE_RESPONSE_CODE, 0) == 0:
-                errors["base"] = res.get(HYPERBASE_RESPONSE_MSG, "Unknown error")
-            else:
-                errors["base"] = f"Failed to configure project ({res.get(HYPERBASE_RESPONSE_CODE)}): {res.get(HYPERBASE_RESPONSE_MSG)}"
+                return await self.async_step_setup_collection()
+            except HyperbaseRESTConnectivityError as exc:
+                errors["base"] = "network_error"
+                placeholders = {
+                    HYPERBASE_RESPONSE_MSG: exc.args,
+                    "network_type": "REST"
+                }
+            except HyperbaseHTTPError as exc:
+                errors["base"] = "login_error"
+                placeholders = {
+                    HYPERBASE_RESPONSE_CODE: exc.status_code,
+                    HYPERBASE_RESPONSE_MSG: exc.args,
+                }
+                if _login_success:
+                    errors["base"] = "project_error"
+                    placeholders = {
+                        HYPERBASE_RESPONSE_CODE: exc.status_code,
+                        HYPERBASE_RESPONSE_MSG: exc.args,
+                    }
         else:
             user_input = {}
         
         return self.async_show_form(
-            step_id="configure_project", 
+            step_id="login", 
             data_schema=vol.Schema(
                 {
+                    vol.Required(CONF_EMAIL, description="Hyperbase Account Email", default=user_input.get(CONF_EMAIL, "")): str,
+                    vol.Required(CONF_PASSWORD, description="Hyperbase Account Password", default=user_input.get(CONF_PASSWORD, "")): str,
                     vol.Required(CONF_PROJECT_ID, description="Hyperbase Project ID", default=user_input.get(CONF_PROJECT_ID, "")): str,
                 }
             ),
-            errors=errors
+            errors=errors,
+            description_placeholders=placeholders
+        )
+    
+    
+    async def async_step_setup_collection(self, user_input: Optional[Dict[str, Any]] = None):
+        """Step to config MQTT connection to Hyperbase"""
+        errors = {}
+        placeholders = {}
+        if user_input is not None:
+            try:
+                await self.hass.async_add_executor_job(validate_api_token,
+                    self.__project_config.get(CONF_PROJECT_ID),
+                    user_input.get("token_id"),
+                    self.__auth_token,
+                    self.__network_config.get(CONF_BASE_URL))
+                
+                return self.async_create_entry(
+                    title=self.__project_config.get(CONF_PROJECT_NAME),
+                    data={
+                        CONF_BASE_URL: self.__network_config.get(CONF_BASE_URL),
+                        CONF_MQTT_ADDRESS: self.__network_config.get(CONF_MQTT_ADDRESS),
+                        CONF_MQTT_PORT: self.__network_config.get(CONF_MQTT_PORT),
+                        CONF_MQTT_TOPIC: self.__network_config.get(CONF_MQTT_TOPIC),
+                        "auth_token": self.__auth_token,
+                        CONF_PROJECT_ID: self.__project_config.get(CONF_PROJECT_ID),
+                        CONF_PROJECT_NAME: self.__project_config.get(CONF_PROJECT_NAME),
+                        "connection_name": user_input.get("connection_name"),
+                        "api_token": user_input.get("token_id")
+                        },
+                )
+            except HyperbaseRESTConnectivityError as exc:
+                errors["base"] = "network_error"
+                placeholders = {
+                    HYPERBASE_RESPONSE_MSG: exc.args,
+                    "network_type": "REST"
+                }
+            except HyperbaseHTTPError as exc:
+                errors["base"] = "token_error"
+                placeholders = {
+                    HYPERBASE_RESPONSE_CODE: exc.status_code,
+                    HYPERBASE_RESPONSE_MSG: exc.args,
+                }
+        else:
+            user_input = {}
+        
+        return self.async_show_form(
+            step_id="setup_collection", data_schema=vol.Schema(
+            {
+                vol.Required("connection_name", default=user_input.get("connection_name", "")): str,
+                vol.Required("token_id", default=user_input.get("token_id", "")): str,
+            }),
+            errors=errors,
+            description_placeholders=placeholders
         )
     
     
@@ -219,37 +336,6 @@ class HyperbaseConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             ),
             errors=errors
         )
-    
-    
-    async def __async_get_project(self, project_id, token: str, base_url: str):
-        res = await self.hass.async_add_executor_job(
-            get_hyperbase_project,
-            project_id,
-            token,
-            base_url,
-        )
-        success: bool = res.get(HYPERBASE_RESPONSE_SUCCESS)
-        if success:
-            self.__project_config = {
-                CONF_PROJECT_ID: project_id,
-                CONF_PROJECT_NAME: res["data"][CONF_NAME],
-            }
-            LOGGER.info("Project configured successfully")
-        return success, res
-    
-    
-    async def __async_login(self, user_email, user_password, base_url):
-        res = await self.hass.async_add_executor_job(
-            login,
-            user_email,
-            user_password,
-            base_url,
-        )
-        success: bool = res.get(HYPERBASE_RESPONSE_SUCCESS)
-        if success:
-            self.__auth_token = res.get(HYPERBASE_RESPONSE_TOKEN)
-            LOGGER.info("Hyperbase login successful")
-        return success, res
 
 
 CONF_ADD_DEVICE = "add_device"
@@ -344,6 +430,7 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
             
             for device in self.__new_registering_device:
                 entry = er.async_get_or_create(
+                    device_id=self.config_entry.runtime_data.hyperbase_device_id,
                     domain="notify",
                     platform="hyperbase",
                     unique_id=device.unique_id,
@@ -352,7 +439,16 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
                     original_name=device.original_name,
                     capabilities=device.capabilities
                 )
-                self.hass.states.async_set(entry.entity_id, datetime.datetime.now(), device.capabilities)
+                domains = await self.config_entry.runtime_data.async_add_configured_device(
+                        device.capabilities.get("listened_device"),
+                        device.capabilities.get("listened_entities"),
+                        device.capabilities.get("poll_time_s"),
+                    )
+                self.config_entry.async_create_task(
+                    self.hass,
+                    self.config_entry.runtime_data.manager.async_revalidate_collections(domains))
+                self.hass.states.async_set(entry.entity_id,
+                                        datetime.datetime.now(), device.capabilities)
             
             # empty list of new added devices
             self.__new_registering_device.clear()

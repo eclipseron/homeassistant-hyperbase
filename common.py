@@ -1,27 +1,18 @@
-import asyncio
 from datetime import timedelta
 import datetime
-import json
-import time
 from typing import Any
-import uuid
 
 import httpx
 
-from homeassistant.helpers.entity import Entity
+from homeassistant.helpers.entity_platform import EntityRegistry
+
 from .util import format_device_name
-from homeassistant.components.sensor import SensorStateClass
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback, State
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.event import async_track_time_interval, async_call_later
-from homeassistant.helpers.aiohttp_client import async_create_clientsession
-# from homeassistant.helpers.
-from homeassistant.components.alarm_control_panel import AlarmControlPanelState
+from homeassistant.helpers.event import async_track_time_interval
 from .mqtt import MQTT
 from .const import (
     CONF_PROJECT_NAME,
-    CONF_REST_TOKEN,
     DOMAIN,
     HYPERBASE_RESPONSE_CODE,
     HYPERBASE_RESPONSE_MSG,
@@ -32,24 +23,9 @@ from .const import (
     MQTT_DISCONNECTED,
 )
 from .models.sensor import SensorModel
-from enum import StrEnum
 from .exceptions import HyperbaseMQTTConnectionError, HyperbaseRESTConnectionError
-from homeassistant.helpers.device_registry import DeviceEntry, DeviceEntryType, async_get as async_get_device_registry
+from homeassistant.helpers.device_registry import DeviceEntry, async_get as async_get_device_registry
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry, async_entries_for_device
-
-# er.async_get_or_create(
-#                 domain="notify",
-#                 platform="hyperbase",
-#                 unique_id=f"{format_device_name(registering_device.name)}_binding",
-#                 has_entity_name=True,
-#                 config_entry=self.config_entry,
-#                 get_initial_options=None,
-#                 capabilities={
-#                     "device": new_device.device,
-#                     "entities": new_device.entities,
-#                     "poll_time_s": new_device.poll_time_s,
-#                 }
-#             )
 
 class ListenedDeviceEntry:
     def __init__(self, device: DeviceEntry, entities: list[str], poll_time_s: int):
@@ -72,21 +48,20 @@ class HyperbaseCoordinator:
         hyperbase_mqtt_topic: str,
         hyperbase_project_name: str,
         hyperbase_project_id: str,
+        device_id: str,
         server_stats: bool | None = False,
     ):
         """Initialize."""
         self.hass = hass
         self.server_stats = server_stats
+        self.hyperbase_device_id = device_id
         self.on_tick_callbacks = []
         self._disconnect_callbacks = []
         self.unloading = False
         self.__mqtt_topic = hyperbase_mqtt_topic
         self.__project_name = hyperbase_project_name
         
-        self.devices: list[str] = [
-            "424d2d933ce25eb5b17d074cc9202452", #SEMB2
-            "45798051e676abc0bf932198f17f2dbc", #SEMB1
-        ]
+        self.__configured_devices: list[dict[str, Any]] = []
         
         
         self.manager = HyperbaseProjectManager(
@@ -110,26 +85,53 @@ class HyperbaseCoordinator:
                 self.hass, MQTT_DISCONNECTED, self._on_connection_change
             )
         )
-
-    def verify_device_platform(self):
+    
+    
+    async def async_get_configured_devices(self, registry: EntityRegistry, device_id: str):
+        """Register added devices into runtime on startup"""
+        entries = async_entries_for_device(registry, device_id)
+        for e in entries:
+            self.__configured_devices.append({
+                "listened_device": e.capabilities.get("listened_device"),
+                "listened_entites": e.capabilities.get("listened_entities"),
+                "poll_time_s": e.capabilities.get("poll_time_s")
+            })
+    
+    
+    async def async_add_configured_device(self, device_id: str, entities: list[str], poll_time_s: int):
+        """Register newly added device into runtime"""
+        self.__configured_devices.append({
+                "listened_device": device_id,
+                "listened_entites": entities,
+                "poll_time_s": poll_time_s
+            })
         er = async_get_entity_registry(self.hass)
-        configured_platforms = []
-        for device in self.devices:
-            entries = async_entries_for_device(er, device)
+        entries = async_entries_for_device(er, device_id)
+        configured_domains = []
+        for e in entries:
+                try:
+                    configured_domains.index(e.domain)
+                except ValueError:
+                    configured_domains.append(e.domain)
+        return configured_domains
+    
+    
+    async def async_verify_domains(self):
+        er = async_get_entity_registry(self.hass)
+        configured_domains = []
+        for device in self.__configured_devices:
+            entries = async_entries_for_device(er, device.get("listened_device"))
             for e in entries:
                 try:
-                    configured_platforms.index(e.domain)
+                    configured_domains.index(e.domain)
                 except ValueError:
-                    configured_platforms.append(e.domain)
-        self.hass.async_create_task(self.revalidate_collections())
-
+                    configured_domains.append(e.domain)
+        await self.manager.async_revalidate_collections(configured_domains)
+    
+    
     @callback
     def _on_connection_change(self, *args, **kwargs):
         pass
-
-
-    async def revalidate_collections(self):
-        await self.manager.async_revalidate_collections()
 
 
     async def connect(self):
@@ -165,9 +167,6 @@ class HyperbaseCoordinator:
     def is_connected(self):
         return self.mqtt_client.connected
 
-    @property
-    def new_registered_devices(self):
-        return self.__new_registered_devices
 
     async def __async_publish_on_tick(self, *args):
         dr = async_get_device_registry(self.hass)
@@ -265,7 +264,7 @@ class HyperbaseProjectManager:
         self.__hyperbase_project_id = hyperbase_project_id
         self.entry = self.hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, self.__hyperbase_project_id)
 
-    async def async_revalidate_collections(self):
+    async def async_revalidate_collections(self, domains:list[str]):
         """Validate hyperbase collections.
         
         Collections are named as follows homeassistant.<base_platform>
@@ -294,7 +293,7 @@ class HyperbaseProjectManager:
                         ))
 
             existed_platforms = [c.name.split(".")[1] for c in collections]
-            missing_collections = set(["sensor", "binary_sensor", "light"]).difference(existed_platforms)
+            missing_collections = set(domains).difference(existed_platforms)
             sensor_model = SensorModel()
             for platform in missing_collections:
                 schema = sensor_model.columns
@@ -304,7 +303,7 @@ class HyperbaseProjectManager:
     def __create_collection(self, platform, schema):
         # result = None
         headers = {
-                "Authorization": f"Bearer {self.entry.data[CONF_REST_TOKEN]}",
+                "Authorization": f"Bearer {self.entry.data["auth_token"]}",
                 # "Authorization": f"Bearer",
             }
         try:
@@ -326,10 +325,10 @@ class HyperbaseProjectManager:
         result = None
         try:
             with httpx.Client() as client:
-                if not self.entry.data[CONF_REST_TOKEN]:
+                if not self.entry.data["auth_token"]:
                     raise HyperbaseRESTConnectionError("Token not found", 401)
                 client.headers.update({
-                    "Authorization": f"Bearer {self.entry.data[CONF_REST_TOKEN]}",
+                    "Authorization": f"Bearer {self.entry.data["auth_token"]}",
                 })
                 client.base_url = self.entry.data[CONF_BASE_URL]
                 result = client.get(f"/api/rest/project/{self.__hyperbase_project_id}/collections")
