@@ -254,22 +254,26 @@ class HyperbaseConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 CONF_ADD_DEVICE = "add_device"
 CONF_MANAGE_DEVICE = "manage_device"
-CONF_CONFIG_DEVICE = "config_device"
+CONF_REMOVE_DEVICE = "config_device"
 
 CONF_ACTIONS = {
     CONF_ADD_DEVICE: "Register New Device",
     CONF_MANAGE_DEVICE: "Manage Registered Devices",
-    CONF_CONFIG_DEVICE: "Configure Device Entities or Logging Interval",
+    CONF_REMOVE_DEVICE: "Remove Registered Device",
 }
+
+CONF_REMOVE_DEVICE_CONFIRM = "remove_device_confirm"
 
 
 class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
+    __new_registering_device: list[ListenedDeviceEntry] = []
+    __current_device = ""
+    __config_actions = ""
+    
     async def async_step_init(self, user_input: Optional[Dict[str, str]]=None):
         if user_input is not None:
-            if user_input[CONF_ACTION] == CONF_ADD_DEVICE:
-                return await self.async_step_select_device()
-            # if user_input[CONF_ACTION] is CONF_CONFIG_DEVICE:
-            #     """handle config"""
+            self.__config_actions = user_input.get(CONF_ACTION)
+            return await self.async_step_select_device()
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
@@ -279,19 +283,44 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
             )
         )
     
-    __new_registering_device: list[ListenedDeviceEntry] = []
-    __new_device = ""
-    
     async def async_step_select_device(self, user_input: Optional[Dict[str, Any]]=None):
+        er = async_get_entity_registry(self.hass)
+        entries = er.entities.get_entries_for_config_entry_id(self.config_entry.entry_id)
+        configured_devices = []
+        for e in entries:
+            configured_devices.append(e.capabilities.get("listened_device"))
+        
+        errors = {}
+        
         if user_input is not None:
-            self.__new_device = user_input["device"]
-            return await self.async_step_select_entities()
+            self.__current_device = user_input.get("device")
+            if self.__config_actions == CONF_ADD_DEVICE:
+                try:
+                    _ = configured_devices.index(self.__current_device)
+                    errors["base"] = "device_exists"
+                except ValueError:
+                    return await self.async_step_select_entities()
+            if self.__config_actions == CONF_MANAGE_DEVICE:
+                try:
+                    _ = configured_devices.index(self.__current_device)
+                    pass
+                except ValueError:
+                    errors["base"]="device_not_exists"
+            if self.__config_actions == CONF_REMOVE_DEVICE:
+                try:
+                    _ = configured_devices.index(self.__current_device)
+                    return await self.async_step_remove_device()
+                except ValueError:
+                    errors["base"]="device_not_exists"
+        else:
+            user_input={}
         
         return self.async_show_form(
             step_id="select_device",
             data_schema=vol.Schema({
-                vol.Required("device"): selector.DeviceSelector(),
-            })
+                vol.Required("device", default=user_input.get("device")): selector.DeviceSelector(),
+            }),
+            errors=errors,
         )
     
     
@@ -299,13 +328,16 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
         dr = async_get_device_registry(self.hass)
         er = async_get_entity_registry(self.hass)
         
-        entries = async_entries_for_device(er, self.__new_device)
+        entries = async_entries_for_device(er, self.__current_device)
         entities = [e.entity_id for e in entries]
         
         if user_input is not None:
-            registering_device = dr.async_get(self.__new_device)
-            new_device = ListenedDeviceEntry(registering_device,
-                user_input["listened_entities"], user_input["poll_time_s"])
+            registering_device = dr.async_get(self.__current_device)
+            new_device = ListenedDeviceEntry(
+                registering_device,
+                user_input.get("listened_entities"),
+                user_input.get("poll_time_s")
+            )
             self.__new_registering_device.append(new_device)
             if user_input["add_next"]:
                 return await self.async_step_select_device()
@@ -341,4 +373,38 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Required("poll_time_s", default=5): int,
                 vol.Required("add_next", default=False): selector.BooleanSelector()
             })
+        )
+    
+    
+    async def async_step_remove_device(self, user_input: Optional[Dict[str, Any]]=None):
+        er = async_get_entity_registry(self.hass)
+        entries = er.entities.get_entries_for_config_entry_id(self.config_entry.entry_id)
+        entity_id = ""
+        
+        errors = {}
+        
+        for e in entries:
+            if e.capabilities["listened_device"] == self.__current_device:
+                entity_id = e.entity_id
+                break
+        
+        if user_input is not None:
+            if user_input[CONF_REMOVE_DEVICE_CONFIRM] != entity_id:
+                errors["base"] = "invalid_id"
+            else:
+                er.async_remove(entity_id)
+                
+                return self.async_create_entry(
+                    title="remove_device_config",
+                    data={}
+                )
+        else:
+            user_input = {}
+        
+        return self.async_show_form(
+            step_id="remove_device",
+            data_schema=vol.Schema({
+                vol.Required(CONF_REMOVE_DEVICE_CONFIRM, default=user_input.get(CONF_REMOVE_DEVICE_CONFIRM, entity_id)): str
+            }),
+            errors=errors
         )
