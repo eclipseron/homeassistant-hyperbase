@@ -1,7 +1,12 @@
+import datetime
 from typing import Any, Dict, Optional
 import httpx
 
-from .hyperbase_mqtt import HyperbaseMQTT
+from .common import ListenedDeviceEntry
+from homeassistant.helpers import selector
+from homeassistant.helpers.device_registry import async_get as async_get_device_registry
+from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry, async_entries_for_device
+
 from homeassistant import config_entries
 from homeassistant.core import callback
 import homeassistant.helpers.config_validation as cv
@@ -247,56 +252,93 @@ class HyperbaseConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return success, res
 
 
-CONF_SETUP_MQTT = "setup_mqtt"
 CONF_ADD_DEVICE = "add_device"
-CONF_REMOVE_DEVICE = "remove_device"
-
+CONF_MANAGE_DEVICE = "manage_device"
+CONF_CONFIG_DEVICE = "config_device"
 
 CONF_ACTIONS = {
-    CONF_SETUP_MQTT: "Configure MQTT Address, Port, and topic to Hyperbase",
-    CONF_ADD_DEVICE: "Add Device Integration",
-    CONF_REMOVE_DEVICE: "Remove Device Integration",
+    CONF_ADD_DEVICE: "Register New Device",
+    CONF_MANAGE_DEVICE: "Manage Registered Devices",
+    CONF_CONFIG_DEVICE: "Configure Device Entities or Logging Interval",
 }
 
 
 class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
-    async def async_step_init(self, user_input):
+    async def async_step_init(self, user_input: Optional[Dict[str, str]]=None):
         if user_input is not None:
-            if user_input[CONF_ACTION] == CONF_SETUP_MQTT:
-                return await self.async_step_setup_mqtt()
-    
+            if user_input[CONF_ACTION] == CONF_ADD_DEVICE:
+                return await self.async_step_select_device()
+            # if user_input[CONF_ACTION] is CONF_CONFIG_DEVICE:
+            #     """handle config"""
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
-                    vol.Required(CONF_ACTION, default=CONF_ADD_DEVICE): vol.In(CONF_ACTIONS),
+                    vol.Required(CONF_ACTION, default=CONF_MANAGE_DEVICE): vol.In(CONF_ACTIONS)
                 }
             )
         )
     
+    __new_registering_device: list[ListenedDeviceEntry] = []
+    __new_device = ""
     
-    async def async_step_setup_mqtt(self, user_input: Optional[dict[str, Any]] = None):
+    async def async_step_select_device(self, user_input: Optional[Dict[str, Any]]=None):
         if user_input is not None:
-            new_entry = self.config_entry.data.copy()
-            new_entry.update(user_input)
-            self.hass.config_entries.async_update_entry(
-                self.config_entry,
-                data=new_entry
-            )
-            return self.async_create_entry(
-                title=new_entry[CONF_PROJECT_NAME],
-                data={},
-            )
-        else:
-            user_input = {}
+            self.__new_device = user_input["device"]
+            return await self.async_step_select_entities()
         
         return self.async_show_form(
-            step_id="setup_mqtt",
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_MQTT_ADDRESS, default=self.config_entry.data.get(CONF_MQTT_ADDRESS, "localhost")): str,
-                    vol.Required(CONF_MQTT_PORT, default=self.config_entry.data.get(CONF_MQTT_PORT, 1883)): cv.port,
-                    vol.Required(CONF_MQTT_TOPIC, default=self.config_entry.data.get(CONF_MQTT_TOPIC, "hyperbase")): str,
-                }
+            step_id="select_device",
+            data_schema=vol.Schema({
+                vol.Required("device"): selector.DeviceSelector(),
+            })
+        )
+    
+    
+    async def async_step_select_entities(self, user_input: Optional[Dict[str, Any]]=None):
+        dr = async_get_device_registry(self.hass)
+        er = async_get_entity_registry(self.hass)
+        
+        entries = async_entries_for_device(er, self.__new_device)
+        entities = [e.entity_id for e in entries]
+        
+        if user_input is not None:
+            registering_device = dr.async_get(self.__new_device)
+            new_device = ListenedDeviceEntry(registering_device,
+                user_input["listened_entities"], user_input["poll_time_s"])
+            self.__new_registering_device.append(new_device)
+            if user_input["add_next"]:
+                return await self.async_step_select_device()
+            
+            for device in self.__new_registering_device:
+                entry = er.async_get_or_create(
+                    domain="notify",
+                    platform="hyperbase",
+                    unique_id=device.unique_id,
+                    has_entity_name=True,
+                    config_entry=self.config_entry,
+                    original_name=device.original_name,
+                    capabilities=device.capabilities
+                )
+                self.hass.states.async_set(entry.entity_id, datetime.datetime.now(), device.capabilities)
+            
+            # empty list of new added devices
+            self.__new_registering_device.clear()
+            return self.async_create_entry(
+                title="new_device_config",
+                data={}
             )
+        
+        return self.async_show_form(
+            step_id="select_entities",
+            data_schema=vol.Schema({
+                vol.Required("listened_entities", default=entities): selector.EntitySelector(
+                    config=selector.EntitySelectorConfig(
+                        include_entities=entities,
+                        multiple=True
+                    )
+                ),
+                vol.Required("poll_time_s", default=5): int,
+                vol.Required("add_next", default=False): selector.BooleanSelector()
+            })
         )

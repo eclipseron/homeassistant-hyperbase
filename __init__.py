@@ -31,21 +31,20 @@ async def async_setup_entry(
     mqtt_port = entry.data[CONF_MQTT_PORT]
     mqtt_topic = entry.data[CONF_MQTT_TOPIC]
     project_name = entry.data[CONF_PROJECT_NAME]
-    
-    project_config = HyperbaseProjectManager(
-        hass,
-        entry.data[CONF_PROJECT_ID],
-    )
-    # await project_config.async_revalidate_collections()
+    project_id = entry.data[CONF_PROJECT_ID]
     
     entry.runtime_data = HyperbaseCoordinator(
         hass,
         mqtt_address,
         mqtt_port,
         mqtt_topic,
-        project_name
+        project_name,
+        project_id
     )
+    entry.runtime_data.verify_device_platform()
     await entry.runtime_data.connect()
+    
+    entry.async_on_unload(entry.add_update_listener(update_listener))
     return True
 
 
@@ -58,6 +57,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: HyperbaseConfigEntry) -
         entry.runtime_data = None
     return True
 
+
+async def update_listener(hass, entry):
+    LOGGER.info(entry.data)
+    """Handle options update."""
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Initialize Hyperbase connection component."""
