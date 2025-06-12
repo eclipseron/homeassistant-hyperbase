@@ -29,3 +29,10 @@ class HyperbaseHTTPError(HomeAssistantError):
         )
         
         self.status_code = status_code
+
+
+class InvalidConnectorEntity(Exception):
+    """Error to indicate invalid hyperbase connector entity name"""
+
+class ConnectorEntityExists(Exception):
+    """Error to indicate hyperbase connector is already registered"""

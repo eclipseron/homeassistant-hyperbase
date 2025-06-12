@@ -41,7 +41,7 @@ class MQTT:
         self._mqttc.on_disconnect = self._mqtt_on_disconnect
 
     async def async_publish(
-        self, topic: str, payload: mqtt.PayloadType, qos: int, retain: bool
+        self, topic: str=None, payload: mqtt.PayloadType=None, qos: int=None, retain: bool=None
     ) -> None:
         """Publish a MQTT message."""
         async with self._paho_lock:

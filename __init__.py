@@ -14,11 +14,12 @@ hello_world:
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.typing import ConfigType
+# from homeassistant.helpers.
 from uuid import uuid4
 from .const import CONF_MQTT_ADDRESS, CONF_MQTT_PORT, CONF_MQTT_TOPIC, CONF_PROJECT_ID, CONF_PROJECT_NAME, DOMAIN, HYPERBASE_CONFIG, LOGGER
 from .common import HyperbaseCoordinator
 from homeassistant.helpers.device_registry import async_get as async_get_device_registry
-from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
+from homeassistant.helpers.entity_registry import RegistryEntry, async_get as async_get_entity_registry
 
 
 HyperbaseConfigEntry = ConfigEntry["HyperbaseCoordinator"]
@@ -29,13 +30,13 @@ async def async_setup_entry(
     """Setup Hyperbase connection from config entry"""
     dr = async_get_device_registry(hass)
     er = async_get_entity_registry(hass)
-    
     hyperbase = dr.async_get_or_create(
         config_entry_id=entry.entry_id,
         manufacturer="Hyperbase",
         identifiers={("hyperbase", entry.data[CONF_PROJECT_ID])},
-        name=entry.data["connection_name"],
-        model="Hyperbase Home Assistant Connector"
+        name=entry.data[CONF_PROJECT_NAME],
+        model="Hyperbase Home Assistant Connector",
+        serial_number=str(uuid4())
     )
     
     config = hass.data[HYPERBASE_CONFIG]
@@ -54,9 +55,13 @@ async def async_setup_entry(
         project_id,
         hyperbase.id
     )
-    await entry.runtime_data.async_get_configured_devices(er, hyperbase.id)
+    await entry.runtime_data.async_get_listened_devices(er, hyperbase.id)
     await entry.runtime_data.async_verify_domains()
-    # await entry.runtime_data.connect()
+    
+    await entry.runtime_data.manager.async_get_project_collections()
+    
+    await entry.runtime_data.connect()
+    await entry.runtime_data.task_manager.async_load_runtime_tasks(entry.runtime_data.configured_devices)
     
     entry.async_on_unload(entry.add_update_listener(update_listener))
     return True

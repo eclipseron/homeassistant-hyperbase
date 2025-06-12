@@ -18,7 +18,9 @@
       "login_error": "Login failed ({code}): {msg}",
       "network_error": "({network_type}) Failed to connect: {msg}",
       "project_error": "Failed to configure project ({code}): {msg}",
-      "token_error": "Failed to verify token ({code}): {msg}"
+      "token_error": "Failed to verify token ({code}): {msg}",
+      "invalid_entity": "Please use alphanumeric or - or _ and no whitespace for connector entity name",
+      "entity_exists": "This connection is exists. Use another name"
     },
     "abort": {
       "already_configured": "[%key:common::config_flow::abort::already_configured_device%]"

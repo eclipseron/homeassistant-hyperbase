@@ -3,7 +3,9 @@ from typing import Any, Dict, Optional
 import httpx
 from paho.mqtt.enums import CallbackAPIVersion, MQTTProtocolVersion
 
-from .exceptions import HyperbaseHTTPError, HyperbaseMQTTConnectionError, HyperbaseRESTConnectivityError
+from .util import is_valid_connector_entity, format_device_name
+
+from .exceptions import ConnectorEntityExists, HyperbaseHTTPError, HyperbaseMQTTConnectionError, HyperbaseRESTConnectivityError, InvalidConnectorEntity
 
 from .common import ListenedDeviceEntry
 from homeassistant.helpers import selector
@@ -20,11 +22,13 @@ from homeassistant.const import (
     CONF_EMAIL,
     CONF_NAME,
     CONF_PASSWORD,
-    CONF_TOKEN
+    CONF_API_TOKEN,
 )
 
 from .const import (
+    CONF_AUTH_TOKEN,
     CONF_MQTT_TOPIC,
+    CONF_TOKEN_ID,
     LOGGER,
     DOMAIN,
     CONF_BASE_URL,
@@ -33,12 +37,8 @@ from .const import (
     CONF_PROJECT_ID,
     CONF_PROJECT_NAME,
     CONF_REST_ADDRESS,
-    CONF_REST_PORT,
-    CONF_REST_PROTOCOL,
     HYPERBASE_RESPONSE_CODE,
     HYPERBASE_RESPONSE_MSG,
-    HYPERBASE_RESPONSE_SUCCESS,
-    HYPERBASE_RESPONSE_TOKEN
 )
 
 def login(email: str, password: str, base_url: str="http://localhost:8080"):
@@ -52,6 +52,7 @@ def login(email: str, password: str, base_url: str="http://localhost:8080"):
         LOGGER.error(exc)
         raise HyperbaseRESTConnectivityError(exc.args)
     except httpx.HTTPStatusError as exc:
+        LOGGER.error(exc.response.json()['error']['message'])
         raise HyperbaseHTTPError(exc.response.json()['error']['status'], status_code=exc.response.status_code)
 
 
@@ -66,6 +67,7 @@ def get_hyperbase_project(project_id:str, auth_token:str, base_url: str="http://
         LOGGER.error(exc)
         raise HyperbaseRESTConnectivityError(exc.args)
     except httpx.HTTPStatusError as exc:
+        LOGGER.error(exc.response.json()['error']['message'])
         raise HyperbaseHTTPError(exc.response.json()['error']['status'], status_code=exc.response.status_code)
 
 
@@ -79,6 +81,7 @@ def validate_api_token(project_id: str, token_id: str, auth_token:str, base_url:
         LOGGER.error(exc)
         raise HyperbaseRESTConnectivityError(exc.args)
     except httpx.HTTPStatusError as exc:
+        LOGGER.error(exc.response.json()['error']['message'])
         raise HyperbaseHTTPError(exc.response.json()['error']['status'], status_code=exc.response.status_code)
 
 
@@ -193,12 +196,13 @@ class HyperbaseConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors = {}
         placeholders = {}
         if user_input is not None:
-            _login_success = False
+            is_login_success = False
+            is_project_exists = False
             try:
                 self.__auth_token = await self.hass.async_add_executor_job(login,
                     user_input.get(CONF_EMAIL), user_input.get(CONF_PASSWORD),
                     self.__network_config.get(CONF_BASE_URL))
-                _login_success = True
+                is_login_success = True
                 project = await self.hass.async_add_executor_job(get_hyperbase_project,
                     user_input.get(CONF_PROJECT_ID),
                     self.__auth_token,
@@ -210,7 +214,28 @@ class HyperbaseConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 }
                 await self.async_set_unique_id(user_input.get(CONF_PROJECT_ID))
                 self._abort_if_unique_id_configured()
-                return await self.async_step_setup_collection()
+                
+                is_project_exists = True
+                
+                await self.hass.async_add_executor_job(validate_api_token,
+                    self.__project_config.get(CONF_PROJECT_ID),
+                    user_input.get(CONF_TOKEN_ID),
+                    self.__auth_token,
+                    self.__network_config.get(CONF_BASE_URL))
+                
+                return self.async_create_entry(
+                    title=self.__project_config.get(CONF_PROJECT_NAME),
+                    data={
+                        CONF_BASE_URL: self.__network_config.get(CONF_BASE_URL),
+                        CONF_MQTT_ADDRESS: self.__network_config.get(CONF_MQTT_ADDRESS),
+                        CONF_MQTT_PORT: self.__network_config.get(CONF_MQTT_PORT),
+                        CONF_MQTT_TOPIC: self.__network_config.get(CONF_MQTT_TOPIC),
+                        CONF_AUTH_TOKEN: self.__auth_token,
+                        CONF_PROJECT_ID: self.__project_config.get(CONF_PROJECT_ID),
+                        CONF_PROJECT_NAME: self.__project_config.get(CONF_PROJECT_NAME),
+                        CONF_API_TOKEN: user_input.get(CONF_TOKEN_ID)
+                        },
+                )
             except HyperbaseRESTConnectivityError as exc:
                 errors["base"] = "network_error"
                 placeholders = {
@@ -218,13 +243,20 @@ class HyperbaseConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "network_type": "REST"
                 }
             except HyperbaseHTTPError as exc:
-                errors["base"] = "login_error"
-                placeholders = {
-                    HYPERBASE_RESPONSE_CODE: exc.status_code,
-                    HYPERBASE_RESPONSE_MSG: exc.args,
-                }
-                if _login_success:
+                if not is_login_success:
+                    errors["base"] = "login_error"
+                    placeholders = {
+                        HYPERBASE_RESPONSE_CODE: exc.status_code,
+                        HYPERBASE_RESPONSE_MSG: exc.args,
+                    }
+                elif not is_project_exists:
                     errors["base"] = "project_error"
+                    placeholders = {
+                        HYPERBASE_RESPONSE_CODE: exc.status_code,
+                        HYPERBASE_RESPONSE_MSG: exc.args,
+                    }
+                else:
+                    errors["base"] = "token_error"
                     placeholders = {
                         HYPERBASE_RESPONSE_CODE: exc.status_code,
                         HYPERBASE_RESPONSE_MSG: exc.args,
@@ -239,60 +271,9 @@ class HyperbaseConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Required(CONF_EMAIL, description="Hyperbase Account Email", default=user_input.get(CONF_EMAIL, "")): str,
                     vol.Required(CONF_PASSWORD, description="Hyperbase Account Password", default=user_input.get(CONF_PASSWORD, "")): str,
                     vol.Required(CONF_PROJECT_ID, description="Hyperbase Project ID", default=user_input.get(CONF_PROJECT_ID, "")): str,
+                    vol.Required(CONF_TOKEN_ID, default=user_input.get(CONF_TOKEN_ID, "")): str,
                 }
             ),
-            errors=errors,
-            description_placeholders=placeholders
-        )
-    
-    
-    async def async_step_setup_collection(self, user_input: Optional[Dict[str, Any]] = None):
-        """Step to config MQTT connection to Hyperbase"""
-        errors = {}
-        placeholders = {}
-        if user_input is not None:
-            try:
-                await self.hass.async_add_executor_job(validate_api_token,
-                    self.__project_config.get(CONF_PROJECT_ID),
-                    user_input.get("token_id"),
-                    self.__auth_token,
-                    self.__network_config.get(CONF_BASE_URL))
-                
-                return self.async_create_entry(
-                    title=self.__project_config.get(CONF_PROJECT_NAME),
-                    data={
-                        CONF_BASE_URL: self.__network_config.get(CONF_BASE_URL),
-                        CONF_MQTT_ADDRESS: self.__network_config.get(CONF_MQTT_ADDRESS),
-                        CONF_MQTT_PORT: self.__network_config.get(CONF_MQTT_PORT),
-                        CONF_MQTT_TOPIC: self.__network_config.get(CONF_MQTT_TOPIC),
-                        "auth_token": self.__auth_token,
-                        CONF_PROJECT_ID: self.__project_config.get(CONF_PROJECT_ID),
-                        CONF_PROJECT_NAME: self.__project_config.get(CONF_PROJECT_NAME),
-                        "connection_name": user_input.get("connection_name"),
-                        "api_token": user_input.get("token_id")
-                        },
-                )
-            except HyperbaseRESTConnectivityError as exc:
-                errors["base"] = "network_error"
-                placeholders = {
-                    HYPERBASE_RESPONSE_MSG: exc.args,
-                    "network_type": "REST"
-                }
-            except HyperbaseHTTPError as exc:
-                errors["base"] = "token_error"
-                placeholders = {
-                    HYPERBASE_RESPONSE_CODE: exc.status_code,
-                    HYPERBASE_RESPONSE_MSG: exc.args,
-                }
-        else:
-            user_input = {}
-        
-        return self.async_show_form(
-            step_id="setup_collection", data_schema=vol.Schema(
-            {
-                vol.Required("connection_name", default=user_input.get("connection_name", "")): str,
-                vol.Required("token_id", default=user_input.get("token_id", "")): str,
-            }),
             errors=errors,
             description_placeholders=placeholders
         )
@@ -417,58 +398,79 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
         entries = async_entries_for_device(er, self.__current_device)
         entities = [e.entity_id for e in entries]
         
+        registering_device = dr.async_get(self.__current_device)
+        connector_entity = f"{format_device_name(registering_device.name)}_{datetime.datetime.now().toordinal()}"
+        
+        errors={}
+        placeholders={}
+        
         if user_input is not None:
-            registering_device = dr.async_get(self.__current_device)
-            new_device = ListenedDeviceEntry(
-                registering_device,
-                user_input.get("listened_entities"),
-                user_input.get("poll_time_s")
-            )
-            self.__new_registering_device.append(new_device)
-            if user_input["add_next"]:
-                return await self.async_step_select_device()
-            
-            for device in self.__new_registering_device:
-                entry = er.async_get_or_create(
-                    device_id=self.config_entry.runtime_data.hyperbase_device_id,
-                    domain="notify",
-                    platform="hyperbase",
-                    unique_id=device.unique_id,
-                    has_entity_name=True,
-                    config_entry=self.config_entry,
-                    original_name=device.original_name,
-                    capabilities=device.capabilities
+            try:
+                _ = is_valid_connector_entity(user_input.get("connector_entity"))
+                new_device = ListenedDeviceEntry(
+                    registering_device,
+                    user_input.get("listened_entities"),
+                    user_input.get("poll_time_s")
                 )
-                domains = await self.config_entry.runtime_data.async_add_configured_device(
-                        device.capabilities.get("listened_device"),
-                        device.capabilities.get("listened_entities"),
-                        device.capabilities.get("poll_time_s"),
+                _entity = er.async_get_entity_id("notify", "hyperbase", f"{user_input.get("connector_entity")}_last_sent")
+                if _entity is not None:
+                    raise ConnectorEntityExists
+                
+                self.__new_registering_device.append(new_device)
+                if user_input["add_next"]:
+                    return await self.async_step_select_device()
+                
+                for device in self.__new_registering_device:
+                    entry = er.async_get_or_create(
+                        device_id=self.config_entry.runtime_data.hyperbase_device_id,
+                        domain="notify",
+                        platform="hyperbase",
+                        unique_id=f"{user_input.get("connector_entity")}_last_sent",
+                        has_entity_name=True,
+                        config_entry=self.config_entry,
+                        original_name=device.original_name,
+                        capabilities=device.capabilities_dict
                     )
-                self.config_entry.async_create_task(
-                    self.hass,
-                    self.config_entry.runtime_data.manager.async_revalidate_collections(domains))
-                self.hass.states.async_set(entry.entity_id,
-                                        datetime.datetime.now(), device.capabilities)
-            
-            # empty list of new added devices
-            self.__new_registering_device.clear()
-            return self.async_create_entry(
-                title="new_device_config",
-                data={}
-            )
+                    domains = await self.config_entry.runtime_data.async_add_configured_device(
+                            device.capabilities.listened_device,
+                            device.capabilities.listened_entities,
+                            device.capabilities.poll_time_s,
+                            entry.entity_id
+                        )
+                    self.config_entry.async_create_task(
+                        self.hass,
+                        self.config_entry.runtime_data.manager.async_revalidate_collections(domains))
+                    self.hass.states.async_set(entry.entity_id,
+                                            datetime.datetime.now(), device.capabilities_dict)
+                
+                # empty list of new added devices
+                self.__new_registering_device.clear()
+                return self.async_create_entry(
+                    title="new_device_config",
+                    data={}
+                )
+            except InvalidConnectorEntity:
+                errors["base"] = "invalid_entity"
+            except ConnectorEntityExists:
+                errors["base"] = "entity_exists"
+        else:
+            user_input = {}
         
         return self.async_show_form(
             step_id="select_entities",
             data_schema=vol.Schema({
-                vol.Required("listened_entities", default=entities): selector.EntitySelector(
+                vol.Required("connector_entity", default=user_input.get("connector_entity", connector_entity)): str,
+                vol.Required("listened_entities", default=user_input.get("listened_entities", entities)): selector.EntitySelector(
                     config=selector.EntitySelectorConfig(
                         include_entities=entities,
                         multiple=True
                     )
                 ),
-                vol.Required("poll_time_s", default=5): int,
+                vol.Required("poll_time_s", default=user_input.get("poll_time_s", 5)): int,
                 vol.Required("add_next", default=False): selector.BooleanSelector()
-            })
+            }),
+            errors=errors,
+            description_placeholders=placeholders
         )
     
     
