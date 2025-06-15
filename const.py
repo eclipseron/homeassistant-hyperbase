@@ -23,6 +23,7 @@ CONF_PROJECT_NAME = "project_name"
 CONF_REST_ADDRESS = "rest_address"
 CONF_AUTH_TOKEN = "auth_token"
 CONF_TOKEN_ID = "token_id"
+CONF_SERIAL_NUMBER = "serial_number"
 
 HYPERBASE_RESPONSE_CODE = "code"
 HYPERBASE_RESPONSE_MSG = "msg"

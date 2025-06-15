@@ -1,12 +1,13 @@
 from datetime import datetime
+from typing import Any
 from homeassistant.core import State
 from homeassistant.helpers.device_registry import DeviceEntry
 from homeassistant.helpers.entity_registry import RegistryEntry
-from .binary_sensor import BinarySensorModel, BINARY_SENSOR_COLUMNS
+from .binary_sensor import BinarySensorColumns, BinarySensorModel, BINARY_SENSOR_COLUMNS
 from .light import LIGHT_COLUMNS, LightModel
-from .sensor import SENSOR_COLUMNS, SensorModel
-from .switch import SWITCH_COLUMNS, SwitchModel
-from .base import BaseModel
+from .sensor import SENSOR_COLUMNS, SensorModel, SensorColumns
+from .switch import SWITCH_COLUMNS, SwitchColumns, SwitchModel
+from .base import BASE_COLUMNS, BaseModel
 
 from homeassistant.const import Platform
 
@@ -16,6 +17,37 @@ COLUMNS_MODELS = {
     Platform.SENSOR: SENSOR_COLUMNS,
     Platform.SWITCH: SWITCH_COLUMNS
 }
+
+class EntityDomainClasses:
+    def __init__(self, domain: str, device_classes: list[str] = []):
+        self.domain = domain
+        self.device_clasess = device_classes
+
+
+def create_schema(entity_domains: list[EntityDomainClasses]) -> dict[str, dict[str, Any]]:
+    schema = {**BASE_COLUMNS}
+    for entity_domain in entity_domains:
+        match entity_domain.domain:
+            case Platform.SENSOR:
+                _additional_cols = SensorColumns(entity_domain.device_clasess)
+                schema = {**schema, **_additional_cols.schema}
+                continue
+            case Platform.BINARY_SENSOR:
+                _additional_cols = BinarySensorColumns(entity_domain.device_clasess)
+                schema = {**schema, **_additional_cols.schema}
+                continue
+            case Platform.SWITCH:
+                _additional_cols = SwitchColumns(entity_domain.device_clasess)
+                schema = {**schema, **_additional_cols.schema}
+                continue
+            case _:
+                schema = {
+                    **schema,
+                    f"{entity_domain.domain}":{"kind": "string", "required": False}
+                }
+                continue
+    return schema
+
 
 def parse_data(connector_serial_number: str,
             connector_entity: str,
@@ -28,11 +60,7 @@ def parse_data(connector_serial_number: str,
     base_info = BaseModel(
         connector_serial_number=connector_serial_number,
         connector_entity=connector_entity,
-        entity_id=entity_entry.entity_id,
         product_id=device_entry.dict_repr["identifiers"][0][1],
-        manufacturer=device_entry.manufacturer,
-        model_name=device_entry.model,
-        model_id=device_entry.model_id,
         name_default=device_entry.name,
         name_by_user=device_entry.name_by_user,
         area_id=device_entry.area_id,

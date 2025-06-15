@@ -1,5 +1,5 @@
-from typing import Any
 from .base import BASE_COLUMNS, BaseModel
+from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 
 
 BINARY_SENSOR_COLUMNS = {
@@ -7,6 +7,16 @@ BINARY_SENSOR_COLUMNS = {
     "device_class": {"kind": "string", "required": False},
     "is_on": {"kind": "boolean", "required": False},
 }
+
+class BinarySensorColumns:
+    def __init__(self, device_classes):
+        self.__columns = {}
+        for dc in device_classes:
+            self.__columns[f"binary_sensor__{dc}"] = {"kind": "boolean", "required": False}
+    @property
+    def schema(self):
+        return self.__columns
+
 
 class BinarySensorModel():
     """asdad"""

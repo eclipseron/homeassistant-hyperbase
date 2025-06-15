@@ -1,53 +1,41 @@
 import datetime
 from typing import Any
-from .base import BaseModel, BASE_COLUMNS
+
+from homeassistant.components.sensor.const import SensorDeviceClass
+from .base import BASE_COLUMNS, BaseModel
 
 SENSOR_COLUMNS = {
     **BASE_COLUMNS,
     "device_class": {"kind": "string", "required": False},
-    "last_reset": {"kind": "timestamp", "required": False},
-    "unit_of_measurement": {"kind": "string", "required": False},
     "value_str": {"kind": "string", "required": False},
     "value_numeric": {"kind": "double", "required": False},
     "value_datetime": {"kind": "timestamp", "required": False},
-    "state_class": {"kind": "string", "required": False},
+    "state_class": {"kind": "string", "required": False}
 }
 
-class SensorModel():
+class SensorColumns:
+    def __init__(self, device_classes):
+        self.__columns = {}
+        for dc in device_classes:
+            if dc == SensorDeviceClass.TIMESTAMP or dc == SensorDeviceClass.DATE:
+                self.__columns[f"sensor__{dc}"] = {"kind": "timestamp", "required": False}
+            elif dc == SensorDeviceClass.ENUM:
+                self.__columns[f"sensor__{dc}"] = {"kind": "string", "required": False}
+            else:
+                self.__columns[f"sensor__{dc}"] = {"kind": "double", "required": False}
+    @property
+    def schema(self):
+        return self.__columns
+
+class SensorModel:
     def __init__(self,
         base_info: BaseModel,
-        # connector_serial_number: str,
-        # connector_entity: str,
-        # entity_id: str,
-        # # hass_device_id: str | None = None,
-        # # domain: str | None = None,
-        # product_id: str | None = None,
-        # manufacturer: str | None = None,
-        # model_name: str | None = None,
-        # model_id: str | None = None,
-        # name_default: str | None = None,
-        # name_by_user: str | None = None,
-        # area_id: str | None = None,
         device_class: str | None = None,
         last_reset: str | None = None,
         unit_of_measurement: str | None = None,
         value: Any | None = None,
         state_class: str | None = None,
         ):
-        # super().__init__(
-        #     connector_serial_number,
-        #     connector_entity,
-        #     entity_id,
-        #     # hass_device_id,
-        #     # domain,
-        #     product_id,
-        #     manufacturer,
-        #     model_name,
-        #     model_id,
-        #     name_default,
-        #     name_by_user,
-        #     area_id
-        # )
         value_datetime = None
         value_numeric = None
         value_str = None

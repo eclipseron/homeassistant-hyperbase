@@ -1,10 +1,11 @@
 import asyncio
 from datetime import timedelta
 import datetime
+from typing import Any
 
 import httpx
 
-from .models import COLUMNS_MODELS, parse_data
+from .models import COLUMNS_MODELS, EntityDomainClasses, create_schema, parse_data
 from homeassistant.const import CONF_API_TOKEN, Platform
 from homeassistant.helpers import json
 from homeassistant.helpers.entity_platform import EntityRegistry
@@ -162,6 +163,51 @@ class HyperbaseCoordinator:
         return configured_domains
     
     
+    async def async_verify_device_models(self):
+        dr = async_get_device_registry(self.hass)
+        er = async_get_entity_registry(self.hass)
+        models: dict[str, dict[str, set]] = {}
+        for device in self.__listened_devices:
+            device_entry = dr.async_get(device.listened_device)
+            model_identity = ""
+            
+            if device_entry.model is not None:
+                model_identity = device_entry.model
+            elif device_entry.model_id is not None:
+                model_identity = device_entry.model_id
+            elif device_entry.name_by_user is not None:
+                model_identity = device_entry.name_by_user
+            else:
+                model_identity = device_entry.name
+            
+            if models.get(model_identity, None) is None:
+                if device_entry.manufacturer is not None:
+                    model_identity = f"{device_entry.manufacturer} {model_identity}"
+                models[model_identity] = {}
+            
+            for listened_entity in device.listened_entities:
+                entity = er.async_get(listened_entity)
+                if models[model_identity].get(entity.domain, None) is None:
+                    models[model_identity][entity.domain] = set([])
+                
+                if entity.original_device_class is not None:
+                    models[model_identity][entity.domain].add(entity.original_device_class)
+        
+        class_model: dict[str, list[EntityDomainClasses]] = {}
+        for model_name in models.keys():
+            if class_model.get(model_name, None) is None:
+                class_model[model_name] = []
+            
+            for domain in models[model_name].keys():
+                domain_class = EntityDomainClasses(
+                    domain,
+                    list(models[model_name][domain])
+                )
+                class_model[model_name].append(domain_class)
+        
+        await self.manager.async_revalidate_collections(class_model)
+    
+    
     async def async_verify_domains(self):
         er = async_get_entity_registry(self.hass)
         configured_domains = []
@@ -172,7 +218,7 @@ class HyperbaseCoordinator:
                     configured_domains.index(entity.domain)
                 except ValueError:
                     configured_domains.append(entity.domain)
-        await self.manager.async_revalidate_collections(configured_domains)
+        # await self.manager.async_revalidate_collections(configured_domains)
     
     
     @callback
@@ -254,10 +300,12 @@ class HyperbaseCollection:
         self,
         id: str,
         name: str,
+        schema_fields: list[str],
     ):
         """Initialize Hyperbase collection."""
         self.id = id
         self.name = name
+        self.schema_fields = set(schema_fields)
 
 
 class TaskMetadata:
@@ -286,7 +334,7 @@ class HyperbaseProjectManager:
         self.entry = self.hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, self.__hyperbase_project_id)
         self.__collections = {}
 
-    async def async_revalidate_collections(self, domains:list[str]):
+    async def async_revalidate_collections(self, model_mapping:dict[str, list[EntityDomainClasses]]):
         """Validate hyperbase collections.
         
         Collections are named as follows homeassistant.<base_platform>
@@ -304,21 +352,32 @@ class HyperbaseProjectManager:
         
         if response is not None:
             collections_data = response.get("data", [])
-            collections = []
+            collections: list[HyperbaseCollection] = []
             for collection in collections_data:
                 
                 # filters only homeassistant collections
-                if collection["name"].startswith("homeassistant."):
+                if collection["name"].startswith("hass."):
                     collections.append(HyperbaseCollection(
                         id=collection["id"],
                         name=collection["name"],
+                        schema_fields=collection["schema_fields"].keys()
                         ))
 
-            existed_platforms = [c.name.split(".")[1] for c in collections]
-            missing_collections = set(domains).difference(existed_platforms)
-            for platform in missing_collections:
-                schema = COLUMNS_MODELS[platform]
-                self.hass.async_create_task(self.__async_create_collection_task(platform, schema))
+            existed_models = [c.name.removeprefix("hass.") for c in collections]
+            missing_collections = set(model_mapping.keys()).difference(existed_models)
+            
+            for model in missing_collections:
+                domain_classes = model_mapping[model]
+                schema = create_schema(domain_classes)
+                self.hass.async_create_task(self.__async_create_collection_task(model, schema))
+            
+            for c in collections:
+                domain_classes = model_mapping[c.name.removeprefix("hass.")]
+                schema = create_schema(domain_classes)
+                diff_columns = set(schema.keys()).difference(c.schema_fields)
+                if len(diff_columns) > 0:
+                    await self.hass.async_add_executor_job(self.__update_collection_fields,
+                        c.id, schema)
 
 
     async def async_get_project_collections(self):
@@ -332,10 +391,10 @@ class HyperbaseProjectManager:
             collections_data = response.get("data", [])
             for collection in collections_data:
                 # filters only homeassistant collections
-                if collection["name"].startswith("homeassistant."):
+                if collection["name"].startswith("hass."):
                     collection_name = collection.get("name")
                     
-                    #retrieve homeassistant.<entity_domain> value
+                    #retrieve homeassistant.<model> value
                     entity_domain = collection_name.split(".")[1] 
                     self.__collections[entity_domain] = collection.get("id")
         LOGGER.info(f"({self.entry.data[CONF_PROJECT_NAME]}) collections reloaded")
@@ -346,6 +405,28 @@ class HyperbaseProjectManager:
             self.__create_collection, entity_domain, schema
         )
 
+    
+    def __update_collection_fields(self, collection_id, schema):
+        headers = {
+                "Authorization": f"Bearer {self.entry.data["auth_token"]}",
+            }
+        response = None
+        base_url = self.entry.data[CONF_BASE_URL]
+        try:
+            with httpx.Client(headers=headers) as session:
+                response = session.patch(f"{base_url}/api/rest/project/{self.__hyperbase_project_id}/collection/{collection_id}",
+                        json={
+                            "schema_fields": schema,
+                        }
+                    )
+                response.raise_for_status()
+                LOGGER.info(f"({self.entry.data[CONF_PROJECT_NAME]}) schema updated for collection: {collection_id}")
+        
+        except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
+            raise HyperbaseRESTConnectivityError(exc.args)
+        except httpx.HTTPStatusError as exc:
+            raise HyperbaseHTTPError(exc.response.json()['error']['message'], status_code=exc.response.status_code)
+        return response
 
     def __create_collection(self, entity_domain, schema):
         headers = {
@@ -361,14 +442,14 @@ class HyperbaseProjectManager:
             with httpx.Client(headers=headers) as session:
                 response = session.post(f"{base_url}/api/rest/project/{self.__hyperbase_project_id}/collection",
                         json={
-                            "name": "homeassistant." + entity_domain,
+                            "name": "hass." + entity_domain,
                             "schema_fields": schema,
                             "opt_auth_column_id": False
                         }
                     )
                 response.raise_for_status()
                 is_success = True
-                LOGGER.info(f"({self.entry.data[CONF_PROJECT_NAME]}) create new collection: homeassistant.{entity_domain}")
+                LOGGER.info(f"({self.entry.data[CONF_PROJECT_NAME]}) create new collection: hass.{entity_domain}")
                 
                 # insert new rule for api token to insert into created collection
                 result = response.json()
@@ -378,12 +459,11 @@ class HyperbaseProjectManager:
                 response = session.post(f"{base_url}/api/rest/project/{self.__hyperbase_project_id}/token/{api_token_id}/collection_rule",
                         json={
                             "collection_id": created_collection_id,
+                            "find_one": "none",
+                            "find_many": "none",
                             "insert_one": True,
-                            "find_one": False,
-                            "find_many": False,
-                            "insert_one": False,
-                            "update_one": False,
-                            "delete_one": False
+                            "update_one": "none",
+                            "delete_one": "none"
                         }
                     )
                 response.raise_for_status()
