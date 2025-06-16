@@ -3,10 +3,10 @@ from typing import Any
 from homeassistant.core import State
 from homeassistant.helpers.device_registry import DeviceEntry
 from homeassistant.helpers.entity_registry import RegistryEntry
-from .binary_sensor import BinarySensorColumns, BinarySensorModel, BINARY_SENSOR_COLUMNS
+from .binary_sensor import BinarySensorColumns, BinarySensorEntityData, BinarySensorModel, BINARY_SENSOR_COLUMNS
 from .light import LIGHT_COLUMNS, LightModel
-from .sensor import SENSOR_COLUMNS, SensorModel, SensorColumns
-from .switch import SWITCH_COLUMNS, SwitchColumns, SwitchModel
+from .sensor import SENSOR_COLUMNS, SensorEntityData, SensorModel, SensorColumns
+from .switch import SWITCH_COLUMNS, SwitchColumns, SwitchEntityData, SwitchModel
 from .base import BASE_COLUMNS, BaseModel
 
 from homeassistant.const import Platform
@@ -18,13 +18,13 @@ COLUMNS_MODELS = {
     Platform.SWITCH: SWITCH_COLUMNS
 }
 
-class EntityDomainClasses:
+class DomainDeviceClass:
     def __init__(self, domain: str, device_classes: list[str] = []):
         self.domain = domain
         self.device_clasess = device_classes
 
 
-def create_schema(entity_domains: list[EntityDomainClasses]) -> dict[str, dict[str, Any]]:
+def create_schema(entity_domains: list[DomainDeviceClass]) -> dict[str, dict[str, Any]]:
     schema = {**BASE_COLUMNS}
     for entity_domain in entity_domains:
         match entity_domain.domain:
@@ -47,6 +47,24 @@ def create_schema(entity_domains: list[EntityDomainClasses]) -> dict[str, dict[s
                 }
                 continue
     return schema
+
+
+def parse_entity_data(entity_entry: RegistryEntry, value: Any | None = None):
+    match entity_entry.domain:
+        case Platform.SENSOR:
+            device_class = entity_entry.original_device_class
+            sensor = SensorEntityData(device_class, value)
+            return sensor.data
+        case Platform.BINARY_SENSOR:
+            device_class = entity_entry.original_device_class
+            binary_sensor = BinarySensorEntityData(device_class, value)
+            return binary_sensor.data
+        case Platform.SWITCH:
+            device_class = entity_entry.original_device_class
+            switch = SwitchEntityData(device_class, value)
+            return switch.data
+        case _:
+            pass
 
 
 def parse_data(connector_serial_number: str,

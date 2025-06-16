@@ -56,13 +56,7 @@ async def async_setup_entry(
         project_id,
         hyperbase.id
     )
-    await entry.runtime_data.async_get_listened_devices(er, hyperbase.id)
-    await entry.runtime_data.async_verify_device_models()
-    
-    # await entry.runtime_data.manager.async_get_project_collections()
-    
-    # await entry.runtime_data.connect()
-    # await entry.runtime_data.task_manager.async_load_runtime_tasks(entry.runtime_data.configured_devices)
+    await entry.runtime_data.async_startup()
     
     entry.async_on_unload(entry.add_update_listener(update_listener))
     return True

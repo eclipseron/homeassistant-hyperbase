@@ -1,3 +1,4 @@
+from typing import Any
 from .base import BASE_COLUMNS, BaseModel
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass
 
@@ -16,6 +17,19 @@ class BinarySensorColumns:
     @property
     def schema(self):
         return self.__columns
+
+
+class BinarySensorEntityData:
+    def __init__(self, device_class: str | None = None, state_value: Any | None = None):
+        self.__device_class = device_class
+        self.__state_value = state_value
+    
+    @property
+    def data(self):
+        if self.__device_class is not None:
+            return {f"binary_sensor__{self.__device_class}": self.__state_value == "on"}
+        else:
+            return {f"binary_sensor__unknown": self.__state_value == "on"}
 
 
 class BinarySensorModel():

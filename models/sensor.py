@@ -27,6 +27,25 @@ class SensorColumns:
     def schema(self):
         return self.__columns
 
+
+
+class SensorEntityData:
+    def __init__(self, device_class: str | None = None, state_value: Any | None = None):
+        self.__device_class = device_class
+        self.__state_value = state_value
+    
+    @property
+    def data(self):
+        if self.__device_class is not None:
+            if self.__device_class == SensorDeviceClass.TIMESTAMP or self.__device_class == SensorDeviceClass.DATE or self.__device_class == SensorDeviceClass.ENUM:
+                return {f"sensor__{self.__device_class}": self.__state_value}
+            else:
+                return {f"sensor__{self.__device_class}": float(self.__state_value)}
+        else:
+            return {f"sensor__unknown": self.__state_value}
+
+
+
 class SensorModel:
     def __init__(self,
         base_info: BaseModel,

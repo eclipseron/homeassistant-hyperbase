@@ -1,5 +1,7 @@
 from re import sub, fullmatch
 
+from homeassistant.helpers.device_registry import DeviceEntry
+
 from .exceptions import InvalidConnectorEntity
 
 def format_device_name(device_name: str):
@@ -21,3 +23,20 @@ def is_valid_connector_entity(user_input: str) -> str:
     if not is_valid:
         raise InvalidConnectorEntity
     return user_input
+
+
+def get_model_identity(device_entry: DeviceEntry):
+    model_identity = ""
+    if device_entry.model is not None:
+        model_identity = device_entry.model
+    elif device_entry.model_id is not None:
+        model_identity = device_entry.model_id
+    elif device_entry.name_by_user is not None:
+        model_identity = device_entry.name_by_user
+    else:
+        model_identity = device_entry.name
+    
+    if device_entry.manufacturer is not None:
+        model_identity = f"{device_entry.manufacturer} {model_identity}"
+    
+    return model_identity

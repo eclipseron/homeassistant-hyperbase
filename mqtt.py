@@ -45,7 +45,6 @@ class MQTT:
     ) -> None:
         """Publish a MQTT message."""
         async with self._paho_lock:
-            _LOGGER.info("Transmitting message on %s: %s", topic, payload)
             await self.hass.async_add_executor_job(
                 self._mqttc.publish, topic, payload, qos, retain
             )

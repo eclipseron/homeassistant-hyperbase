@@ -405,7 +405,7 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
         er = async_get_entity_registry(self.hass)
         
         registering_device = dr.async_get(self.__current_device)
-        connector_entity = f"{format_device_name(registering_device.name)}_{datetime.datetime.now().toordinal()}"
+        connector_entity = f"{format_device_name(registering_device.name)}_{int(datetime.datetime.now().timestamp()*1000)}"
         
         schema = vol.Schema({
             vol.Required("connector_entity", default=connector_entity): str,
