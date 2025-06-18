@@ -149,7 +149,6 @@ class HyperbaseCoordinator:
         LOGGER.info(f"({self.__project_name}) Startup: Listened devices loaded")
         await self.manager.async_revalidate_collections(model_domains_map)
         LOGGER.info(f"({self.__project_name}) Startup: Hyperbase collections revalidated")
-        await self.manager.async_get_project_collections()
         
         await self.connect()
         await self.task_manager.async_load_runtime_tasks(self.__listened_devices)
@@ -159,10 +158,11 @@ class HyperbaseCoordinator:
     def configured_devices(self):
         return self.__listened_devices
 
-    async def async_add_new_listened_device(self, device: ListenedDeviceInfo):
+    async def async_add_new_listened_device(self, device: ListenedDeviceInfo, entity_id: str):
         """
         Add new listened device into the runtime.
         """
+        device.hyperbase_entity_id = entity_id
         self.__listened_devices.append(device)
         if device.model_identity is None:
             raise Exception("device model identity is not exist")
@@ -190,8 +190,9 @@ class HyperbaseCoordinator:
             model_domains_map[model_identity].append(domain_class)
         
         await self.manager.async_revalidate_collections(model_domains_map)
+        await self.task_manager.async_load_runtime_tasks([device]) # register new device into runtime task
 
-    
+
     async def __async_verify_device_models(self):
         """
         Get each device model and construct mapping for corresponding entity domains.
@@ -302,6 +303,7 @@ class HyperbaseProjectManager:
         self.__hyperbase_project_id = hyperbase_project_id
         self.entry = self.hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, self.__hyperbase_project_id)
         self.__collections = {}
+        self.__updated_collections = set([])
 
     async def async_revalidate_collections(self, model_mapping:dict[str, list[DomainDeviceClass]]):
         """Revalidate hyperbase collections.
@@ -331,6 +333,9 @@ class HyperbaseProjectManager:
                         name=collection["name"],
                         schema_fields=collection["schema_fields"].keys()
                         ))
+                    collection_name = collection.get("name")
+                    device_model = collection_name.removeprefix("hass.")
+                    self.__collections[device_model] = collection.get("id")
 
             existing_collections = [c.name.removeprefix("hass.") for c in collections]
             
@@ -352,10 +357,11 @@ class HyperbaseProjectManager:
                 existing_schema = collection.schema_fields
                 missing_columns = set(latest_schema.keys()).difference(existing_schema)
                 if len(missing_columns) > 0:
-                    
-                    # update collection schema need to be sync to prevent race condition with write
-                    # operation into hyperbase
-                    self.hass.async_create_task(self.__async_update_collection_task(collection.id, latest_schema, collection.name))
+                    self.__updated_collections.add(collection.id)
+                    # invoke parallel execution of independent tasks to update collection schema
+                    self.hass.async_create_task(
+                        self.__async_update_collection_task(
+                            collection.id, latest_schema, collection.name))
 
 
     async def async_get_project_collections(self):
@@ -405,7 +411,7 @@ class HyperbaseProjectManager:
                     )
                 response.raise_for_status()
                 LOGGER.info(f"({self.entry.data[CONF_PROJECT_NAME]}) schema updated for collection: {collection_name}")
-        
+                self.__updated_collections.discard(collection_id)
         except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
             raise HyperbaseRESTConnectivityError(exc.args)
         except httpx.HTTPStatusError as exc:
@@ -451,6 +457,7 @@ class HyperbaseProjectManager:
                         }
                     )
                 response.raise_for_status()
+                self.__collections[created_collection.removeprefix("hass.")] = created_collection_id
         except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
             raise HyperbaseRESTConnectivityError(exc.args)
         except httpx.HTTPStatusError as exc:
@@ -485,8 +492,20 @@ class HyperbaseProjectManager:
             return result.json()
 
     @property
+    def project_id(self):
+        return self.__hyperbase_project_id
+    
+    @property
+    def api_token_id(self):
+        return self.entry.data.get(CONF_API_TOKEN)
+    
+    @property
     def collections(self):
         return self.__collections
+    
+    @property
+    def updated_collections(self):
+        return self.__updated_collections
 
 
 
@@ -506,6 +525,9 @@ class Task:
         self.__project_manager = project_manager
     
     async def async_publish_on_tick(self, *args):
+        if not self._mqttc.connected:
+            return
+
         er = async_get_entity_registry(self.hass)
         dr = async_get_device_registry(self.hass)
         device_entry = dr.async_get(self.metadata.device_id)
@@ -521,28 +543,67 @@ class Task:
             "product_id": device_entry.dict_repr["identifiers"][0][1]
         }
         
-        _data_exists = False
         for entity in self.metadata.entities:
             state = self.hass.states.get(entity)
-
-            if state is None or state == "unavailable":
+            if state is None or state.state == "unavailable":
                 continue
             entity_entry = er.async_get(entity)
             entity_data = parse_entity_data(entity_entry, state.state)
             if entity_data is not None:
                 sent_data = {**sent_data, **entity_data}
-                _data_exists = True # flag used to indicate valuable data
-        
-        # only publish data if at least one valuable data exists
-        if not _data_exists:
-            return
-        
         self.hass.async_create_task(self._mqttc.async_publish(
             "hyperbase-pg",
             json.json_dumps({
-                "project_id": "01975477-e801-7643-98eb-f5331419a6ab",
-                "collection_id": self.__project_manager.collections[hyperbase_entry.capabilities.get("collection_name")],
-                "token_id": "01975485-6724-73f2-a618-713250f3872b",
+                "project_id": self.__project_manager.project_id,
+                "collection_id": self.__project_manager.collections.get(hyperbase_entry.capabilities.get("collection_name")),
+                "token_id": self.__project_manager.api_token_id,
+                "data": sent_data,
+            }),
+            qos=0,
+            retain=False,
+            ))
+        self.hass.states.async_set(
+            self.__hyperbase_entity_id,
+            new_state=datetime.datetime.now(),
+            attributes=hyperbase_entry.capabilities,
+            timestamp=datetime.datetime.now().timestamp()
+        )
+    
+    
+    async def async_publish_reload_status(self):
+        if not self._mqttc.connected:
+            return
+        
+        er = async_get_entity_registry(self.hass)
+        dr = async_get_device_registry(self.hass)
+        device_entry = dr.async_get(self.metadata.device_id)
+        hyperbase_entry = er.async_get(self.__hyperbase_entity_id)
+        hyperbase_device = dr.async_get(hyperbase_entry.device_id)
+        
+        sent_data = {
+            "area_id": device_entry.area_id,
+            "connector_entity": self.__hyperbase_entity_id,
+            "connector_serial_number": hyperbase_device.serial_number,
+            "name_by_user": device_entry.name_by_user,
+            "name_default": device_entry.name,
+            "product_id": device_entry.dict_repr["identifiers"][0][1],
+            "status_reload": "reloaded"
+        }
+        
+        for entity in self.metadata.entities:
+            state = self.hass.states.get(entity)
+            if state is None or state.state == "unavailable":
+                continue
+            entity_entry = er.async_get(entity)
+            entity_data = parse_entity_data(entity_entry, state.state)
+            if entity_data is not None:
+                sent_data = {**sent_data, **entity_data}
+        self.hass.async_create_task(self._mqttc.async_publish(
+            "hyperbase-pg",
+            json.json_dumps({
+                "project_id": self.__project_manager.project_id,
+                "collection_id": self.__project_manager.collections.get(hyperbase_entry.capabilities.get("collection_name")),
+                "token_id": self.__project_manager.api_token_id,
                 "data": sent_data,
             }),
             qos=0,
@@ -558,18 +619,43 @@ class Task:
 
 
 class HyperbaseTaskManager:
-    def __init__(self, hass: HomeAssistant, mqttc: MQTT, project_manager = HyperbaseProjectManager):
+    def __init__(self, hass: HomeAssistant, mqttc: MQTT, project_manager: HyperbaseProjectManager):
         self.hass = hass
         self.__mqttc = mqttc
-        # self.__dr = async_get_device_registry(self.hass)
-        # self.__er = async_get_entity_registry(self.hass)
         self.__runtime_tasks = []
         self.__project_manager = project_manager
 
-
     async def async_load_runtime_tasks(self, listened_devices: list[ListenedDeviceInfo]):
         for device in listened_devices:
-            task = Task(
+            self.hass.async_create_task(self.__poll_entity_state(device))
+
+
+    async def __poll_entity_state(self, device: ListenedDeviceInfo):
+        # at least one valueable is available to create new task
+        _flag = False
+        collection_id = self.__project_manager.collections.get(device.model_identity)
+        while True:
+            
+            # wait until corresponding collection ID registered into runtime first
+            if collection_id is None:
+                continue
+            
+            # wait until corresponding collection ID schema updated
+            if self.__project_manager.updated_collections.issuperset([collection_id]):
+                continue
+            
+            # ensure at least one entity is ready to be collected
+            for entity in device.listened_entities:
+                state = self.hass.states.get(entity)
+                if state is None or state.state == "unavailable":
+                    await asyncio.sleep(5) # sleep to spare time for states loading
+                    continue
+                _flag = True
+            
+            if _flag:
+                break
+        
+        task = Task(
                 hass=self.hass,
                 mqtt_client=self.__mqttc,
                 metadata = TaskMetadata(
@@ -580,10 +666,13 @@ class HyperbaseTaskManager:
                 hyperbase_entity_id = device.hyperbase_entity_id,
                 project_manager=self.__project_manager
             )
-            self.__runtime_tasks.append(async_track_time_interval(self.hass,
-                    task.async_publish_on_tick,
-                    interval=timedelta(seconds=device.poll_time_s)
-                ))
+
+        await task.async_publish_reload_status()
+        
+        self.__runtime_tasks.append(async_track_time_interval(self.hass,
+                task.async_publish_on_tick,
+                interval=timedelta(seconds=device.poll_time_s)
+            ))
 
     @property
     def runtime_tasks(self):

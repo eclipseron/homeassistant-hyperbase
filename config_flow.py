@@ -21,6 +21,7 @@ import voluptuous as vol
 from homeassistant.const import (
     CONF_ACTION,
     CONF_EMAIL,
+    CONF_ENTITY_ID,
     CONF_NAME,
     CONF_PASSWORD,
     CONF_API_TOKEN,
@@ -286,7 +287,6 @@ class HyperbaseConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             description_placeholders=placeholders
         )
     
-    
     async def async_step_reconfigure(self, user_input: Optional[Dict[str, Any]] = None):
         """Step to reconfigure MQTT connection to Hyperbase"""
         errors = {}
@@ -346,13 +346,14 @@ class ListenedEntityDomain:
         self.entity = entity_id
 
 class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
-    __new_registering_device: list[ListenedDeviceEntry] = []
     __current_device = ""
-    __config_actions = ""
+    __current_connector_entity = ""
     
     async def async_step_init(self, user_input: Optional[Dict[str, str]]=None):
         if user_input is not None:
-            self.__config_actions = user_input.get(CONF_ACTION)
+            action = user_input.get(CONF_ACTION)
+            if action == CONF_MANAGE_DEVICE or action == CONF_REMOVE_DEVICE:
+                return await self.async_step_select_connector()
             return await self.async_step_select_device()
         return self.async_show_form(
             step_id="init",
@@ -374,20 +375,7 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
         
         if user_input is not None:
             self.__current_device = user_input.get("device")
-            if self.__config_actions == CONF_ADD_DEVICE:
-                return await self.async_step_select_entities()
-            if self.__config_actions == CONF_MANAGE_DEVICE:
-                try:
-                    _ = configured_devices.index(self.__current_device)
-                    pass
-                except ValueError:
-                    errors["base"]="device_not_exists"
-            if self.__config_actions == CONF_REMOVE_DEVICE:
-                try:
-                    _ = configured_devices.index(self.__current_device)
-                    return await self.async_step_remove_device()
-                except ValueError:
-                    errors["base"]="device_not_exists"
+            return await self.async_step_select_entities()
         else:
             user_input={}
         
@@ -399,6 +387,96 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
             errors=errors,
         )
     
+    
+    async def async_step_select_connector(self, user_input: Optional[Dict[str, Any]]=None) -> config_entries.ConfigFlowResult:
+        er = async_get_entity_registry(self.hass)
+        entries = er.entities.get_entries_for_config_entry_id(self.config_entry.entry_id)
+        entities = [entry.entity_id for entry in entries]
+        
+        if user_input is not None:
+            self.__current_connector_entity = user_input.get(CONF_ENTITY_ID)
+            return await self.async_step_manage_connector()
+        else:
+            user_input = {}
+        
+        return self.async_show_form(
+            step_id="select_connector",
+            data_schema=vol.Schema({
+                vol.Required(CONF_ENTITY_ID, default=user_input.get(CONF_ENTITY_ID, entities[0])): selector.EntitySelector(
+                    config=selector.EntitySelectorConfig(
+                        include_entities=entities
+                        )),
+            }),
+        )
+    
+    
+    async def async_step_manage_connector(self, user_input: Optional[Dict[str, Any]]=None):
+        er = async_get_entity_registry(self.hass)
+        
+        entry = er.async_get(self.__current_connector_entity)
+        listened_entities = entry.capabilities.get("listened_entities")
+        schema = vol.Schema({})
+        
+        listened_entity_domains: dict[str, list[str]] = {}
+        
+        for entity in listened_entities:
+            entity_entry = er.async_get(entity)
+            if entity_entry.original_device_class is None:
+                _available_entities = listened_entity_domains.get(entity_entry.domain, [])
+                _available_entities.append(entity_entry.entity_id)
+                listened_entity_domains[entity_entry.domain] = _available_entities
+                continue
+            _available_entities = listened_entity_domains.get(f"{entity_entry.domain}.{entity_entry.original_device_class}", [])
+            _available_entities.append(entity_entry.entity_id)
+            listened_entity_domains[f"{entity_entry.domain}.{entity_entry.original_device_class}"] = _available_entities
+        
+        
+        for entity_domain_mapping in listened_entity_domains.keys():
+            schema = schema.extend({
+                vol.Optional(entity_domain_mapping,
+                        description={
+                            "suggested_value": listened_entity_domains.get(entity_domain_mapping)[0]
+                        }): selector.EntitySelector(
+                        config=selector.EntitySelectorConfig(
+                            include_entities=listened_entity_domains.get(entity_domain_mapping)
+                        )
+                    )
+            })
+        
+        schema = schema.extend({
+            vol.Required("poll_time_s", default=entry.capabilities.get("poll_time_s", 5)): int,
+        })
+        
+        errors={}
+        placeholders={}
+        
+        if user_input is not None:
+            try:
+                listened_entities = []
+                for input_key in user_input.keys():
+                    if input_key == "poll_time_s" or input_key == "add_next" or input_key == "connector_entity":
+                        continue
+                    listened_entities.append(user_input.get(input_key))
+                entry.capabilities["poll_time_s"] = user_input["poll_time_s"]
+                prev_state = self.hass.states.get(self.__current_connector_entity)
+                self.hass.states.async_set(self.__current_connector_entity,
+                    prev_state.state, entry.capabilities)
+                
+                return self.async_create_entry(
+                    title="new_device_config",
+                    data={}
+                )
+            except InvalidConnectorEntity:
+                errors["base"] = "invalid_entity"
+            except ConnectorEntityExists:
+                errors["base"] = "entity_exists"
+        
+        return self.async_show_form(
+            step_id="manage_connector",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders=placeholders
+        )
     
     async def async_step_select_entities(self, user_input: Optional[Dict[str, Any]]=None):
         dr = async_get_device_registry(self.hass)
@@ -470,29 +548,11 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
                         original_name=new_device.original_name,
                         capabilities=new_device.capabilities_dict
                     )
-                self.hass.states.async_set(entry.entity_id,
-                    datetime.datetime.now(), new_device.capabilities_dict)
                 
-                await self.config_entry.runtime_data.async_add_new_listened_device(new_device.capabilities)
-                # self.config_entry.runtime_data.async_verify_device_models()
-                # self.__new_registering_device.append(new_device)
+                await self.config_entry.runtime_data.async_add_new_listened_device(new_device.capabilities, entry.entity_id)
                 if user_input["add_next"]:
                     return await self.async_step_select_device()
                 
-                # for device in self.__new_registering_device:
-                    # domains = await self.config_entry.runtime_data.async_add_configured_device(
-                    #         device.capabilities.listened_device,
-                    #         device.capabilities.listened_entities,
-                    #         device.capabilities.poll_time_s,
-                    #         entry.entity_id
-                    #     )
-                    # self.config_entry.async_create_task(
-                    #     self.hass,
-                    #     self.config_entry.runtime_data.manager.async_revalidate_collections(domains))
-                
-                
-                # empty list of new added devices
-                # self.__new_registering_device.clear()
                 return self.async_create_entry(
                     title="new_device_config",
                     data={}
