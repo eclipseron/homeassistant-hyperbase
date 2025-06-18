@@ -25,7 +25,7 @@ from .const import (
 )
 from .exceptions import HyperbaseHTTPError, HyperbaseMQTTConnectionError, HyperbaseRESTConnectionError, HyperbaseRESTConnectivityError
 from homeassistant.helpers.device_registry import DeviceEntry, async_get as async_get_device_registry
-from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry, async_entries_for_device
+from homeassistant.helpers.entity_registry import RegistryEntry, async_get as async_get_entity_registry, async_entries_for_device
 
 class ListenedDeviceInfo:
     def __init__(
@@ -89,13 +89,13 @@ class HyperbaseCoordinator:
         hyperbase_project_name: str,
         hyperbase_project_id: str,
         device_id: str,
-        server_stats: bool | None = False,
+        # server_stats: bool | None = False,
     ):
         """Initialize."""
         self.hass = hass
-        self.server_stats = server_stats
+        # self.server_stats = server_stats
         self.hyperbase_device_id = device_id
-        self.on_tick_callbacks = []
+        # self.on_tick_callbacks = []
         self._disconnect_callbacks = []
         self.unloading = False
         self.__mqtt_topic = hyperbase_mqtt_topic
@@ -142,6 +142,7 @@ class HyperbaseCoordinator:
                 entity.capabilities.get("listened_entities"),
                 entity.capabilities.get("poll_time_s"),
                 entity.entity_id,
+                entity.capabilities.get("collection_name"),
             )
             self.__listened_devices.append(listened_device)
         model_domains_map = await self.__async_verify_device_models()
@@ -158,23 +159,38 @@ class HyperbaseCoordinator:
     def configured_devices(self):
         return self.__listened_devices
 
-    async def async_add_configured_device(self, listened_device: str, listened_entities: list[str],
-                                        poll_time_s: int, hyperbase_entity_id: str):
+    async def async_add_new_listened_device(self, device: ListenedDeviceInfo):
         """
         Add new listened device into the runtime.
         """
-        device = ListenedDeviceInfo(listened_device, listened_entities, poll_time_s, hyperbase_entity_id)
         self.__listened_devices.append(device)
+        if device.model_identity is None:
+            raise Exception("device model identity is not exist")
+        model_identity = device.model_identity
+        models = {
+            model_identity: {}
+        }
         er = async_get_entity_registry(self.hass)
-        configured_domains = []
-        for entity_id in listened_entities:
-            entity_entry = er.async_get(entity_id)
-            try:
-                configured_domains.index(entity_entry.domain)
-            except ValueError:
-                configured_domains.append(entity_entry.domain)
-        return configured_domains
-    
+        for entity in device.listened_entities:
+            entity_entry = er.async_get(entity)
+            if models[model_identity].get(entity_entry.domain, None) is None:
+                models[model_identity][entity_entry.domain] = set([])
+            
+            if entity_entry.original_device_class is not None:
+                models[model_identity][entity_entry.domain].add(entity_entry.original_device_class)
+        
+        model_domains_map: dict[str, list[DomainDeviceClass]] = {
+            model_identity: []
+        }
+        for domain in models[model_identity].keys():
+            domain_class = DomainDeviceClass(
+                domain,
+                list(models[model_identity][domain])
+            )
+            model_domains_map[model_identity].append(domain_class)
+        
+        await self.manager.async_revalidate_collections(model_domains_map)
+
     
     async def __async_verify_device_models(self):
         """
@@ -189,12 +205,10 @@ class HyperbaseCoordinator:
         - device name by user
         - device default name
         """
-        dr = async_get_device_registry(self.hass)
         er = async_get_entity_registry(self.hass)
         models: dict[str, dict[str, set]] = {}
         for device in self.__listened_devices:
-            device_entry = dr.async_get(device.listened_device)
-            model_identity = get_model_identity(device_entry)
+            model_identity = device.model_identity
             
             if models.get(model_identity, None) is None:
                 models[model_identity] = {}
@@ -341,7 +355,7 @@ class HyperbaseProjectManager:
                     
                     # update collection schema need to be sync to prevent race condition with write
                     # operation into hyperbase
-                    self.hass.async_create_task(self.__async_update_collection_task(collection.id, latest_schema))
+                    self.hass.async_create_task(self.__async_update_collection_task(collection.id, latest_schema, collection.name))
 
 
     async def async_get_project_collections(self):
@@ -369,13 +383,14 @@ class HyperbaseProjectManager:
             self.__create_collection, entity_domain, schema
         )
     
-    async def __async_update_collection_task(self, collection_id, schema):
+    async def __async_update_collection_task(self, collection_id, schema,
+        collection_name: str | None = None):
         await self.hass.async_add_executor_job(
-            self.__update_collection_fields, collection_id, schema
+            self.__update_collection_fields, collection_id, schema, collection_name
         )
 
     
-    def __update_collection_fields(self, collection_id, schema):
+    def __update_collection_fields(self, collection_id, schema, collection_name):
         headers = {
                 "Authorization": f"Bearer {self.entry.data["auth_token"]}",
             }
@@ -389,7 +404,7 @@ class HyperbaseProjectManager:
                         }
                     )
                 response.raise_for_status()
-                LOGGER.info(f"({self.entry.data[CONF_PROJECT_NAME]}) schema updated for collection: {collection_id}")
+                LOGGER.info(f"({self.entry.data[CONF_PROJECT_NAME]}) schema updated for collection: {collection_name}")
         
         except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
             raise HyperbaseRESTConnectivityError(exc.args)
@@ -511,7 +526,6 @@ class Task:
             state = self.hass.states.get(entity)
 
             if state is None or state == "unavailable":
-                LOGGER.warning(f"State for entity: {entity} is unavailable")
                 continue
             entity_entry = er.async_get(entity)
             entity_data = parse_entity_data(entity_entry, state.state)

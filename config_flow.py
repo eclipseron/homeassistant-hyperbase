@@ -454,27 +454,32 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
                 new_device = ListenedDeviceEntry(
                     registering_device,
                     listened_entities,
-                    user_input.get("poll_time_s")
+                    user_input.get("poll_time_s"),
                 )
                 _entity = er.async_get_entity_id("notify", "hyperbase", f"{user_input.get("connector_entity")}_last_sent")
                 if _entity is not None:
                     raise ConnectorEntityExists
                 
-                self.__new_registering_device.append(new_device)
-                if user_input["add_next"]:
-                    return await self.async_step_select_device()
-                
-                for device in self.__new_registering_device:
-                    entry = er.async_get_or_create(
+                entry = er.async_get_or_create(
                         device_id=self.config_entry.runtime_data.hyperbase_device_id,
                         domain="notify",
                         platform="hyperbase",
                         unique_id=f"{user_input.get("connector_entity")}_last_sent",
                         has_entity_name=True,
                         config_entry=self.config_entry,
-                        original_name=device.original_name,
-                        capabilities=device.capabilities_dict
+                        original_name=new_device.original_name,
+                        capabilities=new_device.capabilities_dict
                     )
+                self.hass.states.async_set(entry.entity_id,
+                    datetime.datetime.now(), new_device.capabilities_dict)
+                
+                await self.config_entry.runtime_data.async_add_new_listened_device(new_device.capabilities)
+                # self.config_entry.runtime_data.async_verify_device_models()
+                # self.__new_registering_device.append(new_device)
+                if user_input["add_next"]:
+                    return await self.async_step_select_device()
+                
+                # for device in self.__new_registering_device:
                     # domains = await self.config_entry.runtime_data.async_add_configured_device(
                     #         device.capabilities.listened_device,
                     #         device.capabilities.listened_entities,
@@ -484,11 +489,10 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
                     # self.config_entry.async_create_task(
                     #     self.hass,
                     #     self.config_entry.runtime_data.manager.async_revalidate_collections(domains))
-                    self.hass.states.async_set(entry.entity_id,
-                                            datetime.datetime.now(), device.capabilities_dict)
+                
                 
                 # empty list of new added devices
-                self.__new_registering_device.clear()
+                # self.__new_registering_device.clear()
                 return self.async_create_entry(
                     title="new_device_config",
                     data={}
