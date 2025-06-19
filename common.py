@@ -89,16 +89,12 @@ class HyperbaseCoordinator:
         hyperbase_project_name: str,
         hyperbase_project_id: str,
         device_id: str,
-        # server_stats: bool | None = False,
     ):
         """Initialize."""
         self.hass = hass
-        # self.server_stats = server_stats
         self.hyperbase_device_id = device_id
-        # self.on_tick_callbacks = []
         self._disconnect_callbacks = []
         self.unloading = False
-        self.__mqtt_topic = hyperbase_mqtt_topic
         self.__project_name = hyperbase_project_name
         
         self.__listened_devices: list[ListenedDeviceInfo] = []
@@ -117,7 +113,8 @@ class HyperbaseCoordinator:
         self.task_manager = HyperbaseTaskManager(
             hass,
             self.mqtt_client,
-            self.manager
+            self.manager,
+            hyperbase_mqtt_topic
         )
 
         self._disconnect_callbacks.append(
@@ -516,13 +513,15 @@ class Task:
         mqtt_client: MQTT,
         metadata: TaskMetadata,
         hyperbase_entity_id: str,
-        project_manager: HyperbaseProjectManager
+        project_manager: HyperbaseProjectManager,
+        mqtt_topic: str
     ):
         self.hass = hass
         self.metadata = metadata
         self._mqttc = mqtt_client
         self.__hyperbase_entity_id = hyperbase_entity_id
         self.__project_manager = project_manager
+        self.__mqtt_topic = mqtt_topic
     
     async def async_publish_on_tick(self, *args):
         if not self._mqttc.connected:
@@ -552,7 +551,7 @@ class Task:
             if entity_data is not None:
                 sent_data = {**sent_data, **entity_data}
         self.hass.async_create_task(self._mqttc.async_publish(
-            "hyperbase-pg",
+            self.__mqtt_topic,
             json.json_dumps({
                 "project_id": self.__project_manager.project_id,
                 "collection_id": self.__project_manager.collections.get(hyperbase_entry.capabilities.get("collection_name")),
@@ -619,11 +618,12 @@ class Task:
 
 
 class HyperbaseTaskManager:
-    def __init__(self, hass: HomeAssistant, mqttc: MQTT, project_manager: HyperbaseProjectManager):
+    def __init__(self, hass: HomeAssistant, mqttc: MQTT, project_manager: HyperbaseProjectManager, mqtt_topic: str):
         self.hass = hass
         self.__mqttc = mqttc
         self.__runtime_tasks = []
         self.__project_manager = project_manager
+        self.__mqtt_topic = mqtt_topic
 
     async def async_load_runtime_tasks(self, listened_devices: list[ListenedDeviceInfo]):
         for device in listened_devices:
@@ -664,7 +664,8 @@ class HyperbaseTaskManager:
                     poll_time_s=device.poll_time_s,
                 ),
                 hyperbase_entity_id = device.hyperbase_entity_id,
-                project_manager=self.__project_manager
+                project_manager=self.__project_manager,
+                mqtt_topic=self.__mqtt_topic
             )
 
         await task.async_publish_reload_status()
