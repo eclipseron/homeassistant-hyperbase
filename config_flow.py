@@ -451,25 +451,24 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
         placeholders={}
         
         if user_input is not None:
-            try:
-                listened_entities = []
-                for input_key in user_input.keys():
-                    if input_key == "poll_time_s" or input_key == "add_next" or input_key == "connector_entity":
-                        continue
-                    listened_entities.append(user_input.get(input_key))
-                entry.capabilities["poll_time_s"] = user_input["poll_time_s"]
-                prev_state = self.hass.states.get(self.__current_connector_entity)
-                self.hass.states.async_set(self.__current_connector_entity,
-                    prev_state.state, entry.capabilities)
-                
-                return self.async_create_entry(
-                    title="new_device_config",
-                    data={}
-                )
-            except InvalidConnectorEntity:
-                errors["base"] = "invalid_entity"
-            except ConnectorEntityExists:
-                errors["base"] = "entity_exists"
+            listened_entities = []
+            for input_key in user_input.keys():
+                if input_key == "poll_time_s" or input_key == "add_next" or input_key == "connector_entity":
+                    continue
+                listened_entities.append(user_input.get(input_key))
+            entry.capabilities["poll_time_s"] = user_input["poll_time_s"]
+            entry.capabilities["listened_entities"] = listened_entities
+            prev_state = self.hass.states.get(self.__current_connector_entity)
+            
+            await self.hass.async_add_executor_job(self.hass.states.set,
+                self.__current_connector_entity, prev_state.state, entry.capabilities)
+            
+            self.config_entry.runtime_data.reload_listened_devices()
+            self.__current_connector_entity = ""
+            return self.async_create_entry(
+                title="new_device_config",
+                data={}
+            )
         
         return self.async_show_form(
             step_id="manage_connector",
@@ -477,6 +476,7 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
             errors=errors,
             description_placeholders=placeholders
         )
+    
     
     async def async_step_select_entities(self, user_input: Optional[Dict[str, Any]]=None):
         dr = async_get_device_registry(self.hass)

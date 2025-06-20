@@ -29,7 +29,6 @@ async def async_setup_entry(
 ) -> bool:
     """Setup Hyperbase connection from config entry"""
     dr = async_get_device_registry(hass)
-    er = async_get_entity_registry(hass)
     
     hyperbase = dr.async_get_or_create(
         config_entry_id=entry.entry_id,
@@ -40,7 +39,6 @@ async def async_setup_entry(
         serial_number=entry.data[CONF_SERIAL_NUMBER]
     )
     
-    config = hass.data[HYPERBASE_CONFIG]
     mqtt_address = entry.data[CONF_MQTT_ADDRESS]
     mqtt_port = entry.data[CONF_MQTT_PORT]
     mqtt_topic = entry.data[CONF_MQTT_TOPIC]
@@ -49,12 +47,13 @@ async def async_setup_entry(
     
     entry.runtime_data = HyperbaseCoordinator(
         hass,
+        hyperbase.id,
         mqtt_address,
         mqtt_port,
         mqtt_topic,
-        project_name,
         project_id,
-        hyperbase.id
+        project_name,
+        hyperbase.serial_number,
     )
     await entry.runtime_data.async_startup()
     

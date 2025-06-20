@@ -83,12 +83,13 @@ class HyperbaseCoordinator:
     def __init__(
         self,
         hass: HomeAssistant,
+        device_id: str,
         hyperbase_mqtt_host: str,
         hyperbase_mqtt_port: int,
         hyperbase_mqtt_topic: str,
-        hyperbase_project_name: str,
         hyperbase_project_id: str,
-        device_id: str,
+        hyperbase_project_name: str,
+        serial_number: str,
     ):
         """Initialize."""
         self.hass = hass
@@ -112,9 +113,10 @@ class HyperbaseCoordinator:
         
         self.task_manager = HyperbaseTaskManager(
             hass,
-            self.mqtt_client,
-            self.manager,
-            hyperbase_mqtt_topic
+            connector_serial_number=serial_number,
+            mqttc = self.mqtt_client,
+            mqtt_topic=hyperbase_mqtt_topic,
+            project_manager=self.manager,
         )
 
         self._disconnect_callbacks.append(
@@ -130,6 +132,19 @@ class HyperbaseCoordinator:
     
     
     async def async_startup(self):
+        self.reload_listened_devices()
+        model_domains_map = await self.__async_verify_device_models()
+        LOGGER.info(f"({self.__project_name}) Startup: Listened devices loaded")
+        await self.manager.async_revalidate_collections(model_domains_map)
+        LOGGER.info(f"({self.__project_name}) Startup: Hyperbase collections revalidated")
+        
+        await self.connect()
+        await self.task_manager.async_load_runtime_tasks(self.__listened_devices)
+    
+    
+    def reload_listened_devices(self) -> list[ListenedDeviceInfo]:
+        """Reload listened devices and return updated list of ListenedDeviceInfo to be used later"""
+        self.__listened_devices = []
         er = async_get_entity_registry(self.hass)
         entity_entries = async_entries_for_device(er, self.hyperbase_device_id)
         
@@ -142,18 +157,8 @@ class HyperbaseCoordinator:
                 entity.capabilities.get("collection_name"),
             )
             self.__listened_devices.append(listened_device)
-        model_domains_map = await self.__async_verify_device_models()
-        LOGGER.info(f"({self.__project_name}) Startup: Listened devices loaded")
-        await self.manager.async_revalidate_collections(model_domains_map)
-        LOGGER.info(f"({self.__project_name}) Startup: Hyperbase collections revalidated")
-        
-        await self.connect()
-        await self.task_manager.async_load_runtime_tasks(self.__listened_devices)
-    
-    
-    @property
-    def configured_devices(self):
         return self.__listened_devices
+
 
     async def async_add_new_listened_device(self, device: ListenedDeviceInfo, entity_id: str):
         """
@@ -277,17 +282,6 @@ class HyperbaseCollection:
         self.schema_fields = set(schema_fields)
 
 
-class TaskMetadata:
-    def __init__(
-        self,
-        device_id: str,
-        entities:list[str],
-        poll_time_s:int):
-        self.device_id = device_id
-        self.entities = entities
-        self.poll_time_s = poll_time_s
-
-
 
 class HyperbaseProjectManager:
     def __init__(
@@ -392,6 +386,9 @@ class HyperbaseProjectManager:
             self.__update_collection_fields, collection_id, schema, collection_name
         )
 
+    
+    def get_collection_id(self, model_identity: str):
+        return self.collections.get(model_identity)
     
     def __update_collection_fields(self, collection_id, schema, collection_name):
         headers = {
@@ -506,65 +503,99 @@ class HyperbaseProjectManager:
 
 
 
+class TaskMetadata:
+    def __init__(
+        self,
+        project_id: str,
+        api_token_id: str):
+        self.__project_id = project_id
+        self.__api_token_id = api_token_id
+    
+    
+    @property
+    def project_id(self):
+        return self.__project_id
+    
+    @property
+    def api_token_id(self):
+        return self.__api_token_id
+
+
+
 class Task:
     def __init__(
         self,
         hass: HomeAssistant,
+        connector_serial_number: str,
+        device_info: ListenedDeviceInfo,
         mqtt_client: MQTT,
-        metadata: TaskMetadata,
-        hyperbase_entity_id: str,
+        mqtt_topic: str,
         project_manager: HyperbaseProjectManager,
-        mqtt_topic: str
     ):
         self.hass = hass
-        self.metadata = metadata
+        self.__device_info = device_info
         self._mqttc = mqtt_client
-        self.__hyperbase_entity_id = hyperbase_entity_id
         self.__project_manager = project_manager
         self.__mqtt_topic = mqtt_topic
+        self.__connector_serial_number = connector_serial_number
+        self.__prev_data = None
     
     async def async_publish_on_tick(self, *args):
         if not self._mqttc.connected:
             return
-
         er = async_get_entity_registry(self.hass)
         dr = async_get_device_registry(self.hass)
-        device_entry = dr.async_get(self.metadata.device_id)
-        hyperbase_entry = er.async_get(self.__hyperbase_entity_id)
-        hyperbase_device = dr.async_get(hyperbase_entry.device_id)
+        device_entry = dr.async_get(self.__device_info.listened_device)
         
         sent_data = {
             "area_id": device_entry.area_id,
-            "connector_entity": self.__hyperbase_entity_id,
-            "connector_serial_number": hyperbase_device.serial_number,
+            "connector_entity": self.__device_info.hyperbase_entity_id,
+            "connector_serial_number": self.__connector_serial_number,
             "name_by_user": device_entry.name_by_user,
             "name_default": device_entry.name,
             "product_id": device_entry.dict_repr["identifiers"][0][1]
         }
         
-        for entity in self.metadata.entities:
+        _data_exist = False
+        
+        for entity in self.__device_info.listened_entities:
             state = self.hass.states.get(entity)
             if state is None or state.state == "unavailable":
                 continue
             entity_entry = er.async_get(entity)
             entity_data = parse_entity_data(entity_entry, state.state)
             if entity_data is not None:
-                sent_data = {**sent_data, **entity_data}
+                self.__prev_data = {**sent_data, **entity_data}
+                _data_exist = True
+        
+        if not _data_exist:
+            if self.__prev_data is None:
+                return
+            else:
+                self.__prev_data["status"] = "device unavailable"
+        
+        
         self.hass.async_create_task(self._mqttc.async_publish(
             self.__mqtt_topic,
             json.json_dumps({
                 "project_id": self.__project_manager.project_id,
-                "collection_id": self.__project_manager.collections.get(hyperbase_entry.capabilities.get("collection_name")),
+                "collection_id": self.__project_manager.get_collection_id(self.__device_info.model_identity),
                 "token_id": self.__project_manager.api_token_id,
-                "data": sent_data,
+                "data": self.__prev_data,
             }),
             qos=0,
             retain=False,
             ))
+        
         self.hass.states.async_set(
-            self.__hyperbase_entity_id,
+            self.__device_info.hyperbase_entity_id,
             new_state=datetime.datetime.now(),
-            attributes=hyperbase_entry.capabilities,
+            attributes={
+                "listened_device": self.__device_info.listened_device,
+                "listened_entities": self.__device_info.listened_entities,
+                "poll_time_s": self.__device_info.poll_time_s,
+                "model_identity": self.__device_info.model_identity,
+                },
             timestamp=datetime.datetime.now().timestamp()
         )
     
@@ -572,24 +603,21 @@ class Task:
     async def async_publish_reload_status(self):
         if not self._mqttc.connected:
             return
-        
         er = async_get_entity_registry(self.hass)
         dr = async_get_device_registry(self.hass)
-        device_entry = dr.async_get(self.metadata.device_id)
-        hyperbase_entry = er.async_get(self.__hyperbase_entity_id)
-        hyperbase_device = dr.async_get(hyperbase_entry.device_id)
+        device_entry = dr.async_get(self.__device_info.listened_device)
         
         sent_data = {
             "area_id": device_entry.area_id,
-            "connector_entity": self.__hyperbase_entity_id,
-            "connector_serial_number": hyperbase_device.serial_number,
+            "connector_entity": self.__device_info.hyperbase_entity_id,
+            "connector_serial_number": self.__connector_serial_number,
             "name_by_user": device_entry.name_by_user,
             "name_default": device_entry.name,
             "product_id": device_entry.dict_repr["identifiers"][0][1],
-            "status_reload": "reloaded"
+            "status": "reloaded"
         }
         
-        for entity in self.metadata.entities:
+        for entity in self.__device_info.listened_entities:
             state = self.hass.states.get(entity)
             if state is None or state.state == "unavailable":
                 continue
@@ -597,33 +625,48 @@ class Task:
             entity_data = parse_entity_data(entity_entry, state.state)
             if entity_data is not None:
                 sent_data = {**sent_data, **entity_data}
+        
         self.hass.async_create_task(self._mqttc.async_publish(
-            "hyperbase-pg",
+            self.__mqtt_topic,
             json.json_dumps({
                 "project_id": self.__project_manager.project_id,
-                "collection_id": self.__project_manager.collections.get(hyperbase_entry.capabilities.get("collection_name")),
+                "collection_id": self.__project_manager.get_collection_id(self.__device_info.model_identity),
                 "token_id": self.__project_manager.api_token_id,
                 "data": sent_data,
             }),
             qos=0,
             retain=False,
             ))
+        
         self.hass.states.async_set(
-            self.__hyperbase_entity_id,
+            self.__device_info.hyperbase_entity_id,
             new_state=datetime.datetime.now(),
-            attributes=hyperbase_entry.capabilities,
+            attributes={
+                "listened_device": self.__device_info.listened_device,
+                "listened_entities": self.__device_info.listened_entities,
+                "poll_time_s": self.__device_info.poll_time_s,
+                "model_identity": self.__device_info.model_identity,
+                },
             timestamp=datetime.datetime.now().timestamp()
         )
 
 
 
 class HyperbaseTaskManager:
-    def __init__(self, hass: HomeAssistant, mqttc: MQTT, project_manager: HyperbaseProjectManager, mqtt_topic: str):
+    def __init__(self,
+        hass: HomeAssistant,
+        connector_serial_number: str,
+        mqttc: MQTT,
+        mqtt_topic: str,
+        project_manager: HyperbaseProjectManager,
+        ):
+        
         self.hass = hass
         self.__mqttc = mqttc
         self.__runtime_tasks = []
         self.__project_manager = project_manager
         self.__mqtt_topic = mqtt_topic
+        self.__connector_serial_number = connector_serial_number
 
     async def async_load_runtime_tasks(self, listened_devices: list[ListenedDeviceInfo]):
         for device in listened_devices:
@@ -633,9 +676,15 @@ class HyperbaseTaskManager:
     async def __poll_entity_state(self, device: ListenedDeviceInfo):
         # at least one valueable is available to create new task
         _flag = False
-        collection_id = self.__project_manager.collections.get(device.model_identity)
+        
         while True:
             
+            # cancel work if integration is unloaded
+            if self.__mqttc is None:
+                return
+            
+            collection_id = self.__project_manager.get_collection_id(device.model_identity)
+
             # wait until corresponding collection ID registered into runtime first
             if collection_id is None:
                 continue
@@ -657,15 +706,11 @@ class HyperbaseTaskManager:
         
         task = Task(
                 hass=self.hass,
+                connector_serial_number=self.__connector_serial_number,
+                device_info=device,
                 mqtt_client=self.__mqttc,
-                metadata = TaskMetadata(
-                    device_id=device.listened_device,
-                    entities=device.listened_entities,
-                    poll_time_s=device.poll_time_s,
-                ),
-                hyperbase_entity_id = device.hyperbase_entity_id,
+                mqtt_topic=self.__mqtt_topic,
                 project_manager=self.__project_manager,
-                mqtt_topic=self.__mqtt_topic
             )
 
         await task.async_publish_reload_status()

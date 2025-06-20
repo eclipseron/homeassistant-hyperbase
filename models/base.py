@@ -11,7 +11,7 @@ BASE_COLUMNS = {
     "name_default": {"kind": "string", "required": False},
     "name_by_user": {"kind": "string", "required": False},
     "area_id": {"kind": "string", "required": False},
-    "status_reload": {"kind": "string", "required": False}
+    "status": {"kind": "string", "required": False}
 }
 
 class BaseModel:
