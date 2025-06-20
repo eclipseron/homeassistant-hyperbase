@@ -13,6 +13,7 @@ from homeassistant.helpers import selector
 from homeassistant.helpers.device_registry import async_get as async_get_device_registry
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry, async_entries_for_device
 from paho.mqtt import client as mqtt
+from .models import DomainDeviceClass, create_schema
 
 from homeassistant import config_entries
 from homeassistant.core import callback
@@ -414,28 +415,35 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
         er = async_get_entity_registry(self.hass)
         
         entry = er.async_get(self.__current_connector_entity)
-        listened_entities = entry.capabilities.get("listened_entities")
-        schema = vol.Schema({})
         
         listened_entity_domains: dict[str, list[str]] = {}
+        listened_entities: list = entry.capabilities.get("listened_entities")
         
-        for entity in listened_entities:
-            entity_entry = er.async_get(entity)
-            if entity_entry.original_device_class is None:
-                _available_entities = listened_entity_domains.get(entity_entry.domain, [])
-                _available_entities.append(entity_entry.entity_id)
-                listened_entity_domains[entity_entry.domain] = _available_entities
+        entity_entries = async_entries_for_device(er, entry.capabilities.get("listened_device"))
+        for default_entity in entity_entries:
+            if default_entity.original_device_class is None:
+                _available_entities = listened_entity_domains.get(default_entity.domain, [])
+                _available_entities.append(default_entity.entity_id)
+                listened_entity_domains[default_entity.domain] = _available_entities
                 continue
-            _available_entities = listened_entity_domains.get(f"{entity_entry.domain}.{entity_entry.original_device_class}", [])
-            _available_entities.append(entity_entry.entity_id)
-            listened_entity_domains[f"{entity_entry.domain}.{entity_entry.original_device_class}"] = _available_entities
+            _available_entities = listened_entity_domains.get(f"{default_entity.domain}.{default_entity.original_device_class}", [])
+            _available_entities.append(default_entity.entity_id)
+            listened_entity_domains[f"{default_entity.domain}.{default_entity.original_device_class}"] = _available_entities
+        
+        
+        schema = vol.Schema({})
         
         
         for entity_domain_mapping in listened_entity_domains.keys():
+            default_select = set(listened_entity_domains.get(entity_domain_mapping)).intersection(listened_entities)
+            _selected = None
+            if len(default_select) > 0:
+                _selected = list(default_select)[0]
+            
             schema = schema.extend({
                 vol.Optional(entity_domain_mapping,
                         description={
-                            "suggested_value": listened_entity_domains.get(entity_domain_mapping)[0]
+                            "suggested_value": _selected
                         }): selector.EntitySelector(
                         config=selector.EntitySelectorConfig(
                             include_entities=listened_entity_domains.get(entity_domain_mapping)
@@ -453,17 +461,75 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
         if user_input is not None:
             listened_entities = []
             for input_key in user_input.keys():
-                if input_key == "poll_time_s" or input_key == "add_next" or input_key == "connector_entity":
+                if input_key == "poll_time_s":
                     continue
                 listened_entities.append(user_input.get(input_key))
             entry.capabilities["poll_time_s"] = user_input["poll_time_s"]
             entry.capabilities["listened_entities"] = listened_entities
             prev_state = self.hass.states.get(self.__current_connector_entity)
             
+            # set updated configuration into corresponding entity attributes
             await self.hass.async_add_executor_job(self.hass.states.set,
-                self.__current_connector_entity, prev_state.state, entry.capabilities)
+                self.__current_connector_entity, prev_state.state, entry.capabilities, True)
             
-            self.config_entry.runtime_data.reload_listened_devices()
+            device_info = self.config_entry.runtime_data.task_manager.get_device_info_by_entity(self.__current_connector_entity)
+            model_identity = device_info.model_identity
+            
+            # construct schema for updated listened_entities.
+            # It is used to check if hyperbase collection schema should update.
+            models = {
+                model_identity: {}
+            }
+            er = async_get_entity_registry(self.hass)
+            for entity in listened_entities:
+                entity_entry = er.async_get(entity)
+                if models[model_identity].get(entity_entry.domain, None) is None:
+                    models[model_identity][entity_entry.domain] = set([])
+                
+                if entity_entry.original_device_class is not None:
+                    models[model_identity][entity_entry.domain].add(entity_entry.original_device_class)
+            
+            model_domains_map: dict[str, list[DomainDeviceClass]] = {
+                model_identity: []
+            }
+            
+            for domain in models[model_identity].keys():
+                domain_class = DomainDeviceClass(
+                    domain,
+                    list(models[model_identity][domain])
+                )
+                model_domains_map[model_identity].append(domain_class)
+            
+            device_classes = model_domains_map[device_info.model_identity]
+            latest_schema = create_schema(device_classes)
+            
+            # Fetch current collections and schema
+            response = await self.hass.async_add_executor_job(self.config_entry.runtime_data.manager.fetch_collections)
+            collections_data = response.get("data", [])
+            
+            existing_schema = None
+            collection_id = None
+            colection_name = None
+            
+            for collection in collections_data:
+                # filters only homeassistant collections
+                if collection["name"] == f"hass.{device_info.model_identity}":
+                    existing_schema = collection.get("schema_fields").keys()
+                    colection_name = collection.get("name")
+                    collection_id = collection.get("id")
+            
+            # check for different schema.
+            # call update schema API if needed
+            missing_columns = set(latest_schema.keys()).difference(existing_schema)
+            if len(missing_columns) > 0:
+                await self.config_entry.runtime_data.manager.async_update_collection_task(
+                    collection_id, latest_schema, colection_name)
+            
+            
+            # mutate Task in the runtime task info list
+            device_info.listened_entities = listened_entities
+            device_info.poll_time_s = user_input["poll_time_s"]
+            
             self.__current_connector_entity = ""
             return self.async_create_entry(
                 title="new_device_config",
