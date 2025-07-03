@@ -187,6 +187,89 @@ class HyperbaseCoordinator:
         await self.task_manager.async_load_runtime_tasks([device]) # register new device into runtime task
 
 
+    async def async_update_listened_entities(self,
+        connector_entity: str,
+        listened_entities: list[str],
+        poll_time_s: int
+        ):
+        
+        device_info = self.task_manager.get_device_info_by_entity(connector_entity)
+        model_identity = device_info.model_identity
+        # construct schema for updated listened_entities.
+        # It is used to check if hyperbase collection schema should update.
+        models = {
+            model_identity: {}
+        }
+        er = async_get_entity_registry(self.hass)
+        for entity in listened_entities:
+            entity_entry = er.async_get(entity)
+            if models[model_identity].get(entity_entry.domain, None) is None:
+                models[model_identity][entity_entry.domain] = set([])
+            
+            if entity_entry.original_device_class is not None:
+                models[model_identity][entity_entry.domain].add(entity_entry.original_device_class)
+        
+        model_domains_map: dict[str, list[DomainDeviceClass]] = {
+            model_identity: []
+        }
+        
+        for domain in models[model_identity].keys():
+            domain_class = DomainDeviceClass(
+                domain,
+                list(models[model_identity][domain])
+            )
+            model_domains_map[model_identity].append(domain_class)
+        
+        device_classes = model_domains_map[device_info.model_identity]
+        latest_schema = create_schema(device_classes)
+        
+        # Fetch current collections and schema
+        response = await self.hass.async_add_executor_job(self.manager.fetch_collections)
+        collections_data = response.get("data", [])
+        
+        existing_schema = None
+        collection_id = None
+        collection_name = None
+        
+        for collection in collections_data:
+            # filters only homeassistant collections
+            if collection["name"] == f"hass.{device_info.model_identity}":
+                existing_schema = collection.get("schema_fields")
+                collection_name = collection.get("name")
+                collection_id = collection.get("id")
+        
+        # check for different schema.
+        # call update schema API if needed
+        missing_columns = set(latest_schema.keys()).difference(existing_schema.keys())
+        if len(missing_columns) > 0:
+            await self.manager.async_update_collection_task(
+                collection_id, {**latest_schema, **existing_schema}, collection_name)
+        
+        # mutate Task in the runtime task info list
+        # idk if it is best practice or not, duhh..
+        # if it is working, I ain't touching that anymore
+        device_info.listened_entities = listened_entities
+        device_info.poll_time_s = poll_time_s
+        
+        # use returned device_info to cancel and reload runtime task
+        # if needed.
+        return device_info
+    
+    
+    async def async_reload_task(self, key:str, device: ListenedDeviceInfo):
+        self._cancel_runtime_task(key)
+        await asyncio.sleep(1) # wait for task cancelation
+        self.task_manager.async_load_runtime_tasks([device])
+    
+    
+    def _cancel_runtime_task(self, key: str):
+        """Cancel task and clear info from runtime dictionary"""
+        tasks = self.task_manager.runtime_tasks
+        task_info = self.task_manager.runtime_task_info
+        cancel = tasks[key]
+        cancel()
+        del task_info[key]
+
     async def __async_verify_device_models(self):
         """
         Get each device model and construct mapping for corresponding entity domains.
@@ -250,8 +333,9 @@ class HyperbaseCoordinator:
         self.unloading = True
         await self.mqtt_client.async_disconnect()
         tasks = self.task_manager.runtime_tasks
-        for task in tasks:
-            task() # terminate all tasks
+        for connector_id in tasks.keys():
+            task = tasks[connector_id] # terminate all tasks
+            task()
         for cb in self._disconnect_callbacks:
             cb() # terminate event dispatcher callbacks
 
@@ -533,7 +617,7 @@ class Task:
         self.__prev_fields = set([])
     
     async def async_publish_on_tick(self, *args):
-        if not self._mqttc.connected:
+        if self._mqttc is None:
             return
         er = async_get_entity_registry(self.hass)
         dr = async_get_device_registry(self.hass)
@@ -608,7 +692,7 @@ class Task:
     
     
     async def async_publish_reload_status(self):
-        if not self._mqttc.connected:
+        if self._mqttc is None:
             return
         er = async_get_entity_registry(self.hass)
         dr = async_get_device_registry(self.hass)
@@ -670,7 +754,7 @@ class HyperbaseTaskManager:
         
         self.hass = hass
         self.__mqttc = mqttc
-        self.__runtime_tasks = []
+        self.__runtime_tasks: dict[str, Any] = {}
         self.__runtime_task_info: dict[str, Task] = {}
         self.__project_manager = project_manager
         self.__mqtt_topic = mqtt_topic
@@ -721,19 +805,13 @@ class HyperbaseTaskManager:
                 project_manager=self.__project_manager,
             )
         self.__runtime_task_info[device.hyperbase_entity_id] = task
-
+        
         await task.async_publish_reload_status()
         
-        self.__runtime_tasks.append(async_track_time_interval(self.hass,
+        self.__runtime_tasks[device.hyperbase_entity_id] = async_track_time_interval(self.hass,
                 task.async_publish_on_tick,
                 interval=timedelta(seconds=device.poll_time_s)
-            ))
-    
-    
-    def update_task_device_info(self, connector_entity: str, device_info: ListenedDeviceInfo):
-        """update task info while data collecting is running"""
-        self.__runtime_task_info[connector_entity].device_info = device_info
-    
+            )
     
     def get_device_info_by_entity(self, connector_entity: str) -> ListenedDeviceInfo | None:
         if self.__runtime_task_info.get(connector_entity) is None:
@@ -744,3 +822,7 @@ class HyperbaseTaskManager:
     @property
     def runtime_tasks(self):
         return self.__runtime_tasks
+    
+    @property
+    def runtime_task_info(self):
+        return self.__runtime_task_info

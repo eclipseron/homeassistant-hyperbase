@@ -418,6 +418,7 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
         
         listened_entity_domains: dict[str, list[str]] = {}
         listened_entities: list = entry.capabilities.get("listened_entities")
+        prev_poll_time_s: int = entry.capabilities.get("poll_time_s")
         
         entity_entries = async_entries_for_device(er, entry.capabilities.get("listened_device"))
         for default_entity in entity_entries:
@@ -468,67 +469,23 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
             entry.capabilities["listened_entities"] = listened_entities
             prev_state = self.hass.states.get(self.__current_connector_entity)
             
-            # set updated configuration into corresponding entity attributes
+            # set updated configuration into corresponding entity attributes.
+            # awaits the execution to make sure the attributes is updated before
+            # continue the operation.
             await self.hass.async_add_executor_job(self.hass.states.set,
                 self.__current_connector_entity, prev_state.state, entry.capabilities, True)
             
-            device_info = self.config_entry.runtime_data.task_manager.get_device_info_by_entity(self.__current_connector_entity)
-            model_identity = device_info.model_identity
             
-            # construct schema for updated listened_entities.
-            # It is used to check if hyperbase collection schema should update.
-            models = {
-                model_identity: {}
-            }
-            er = async_get_entity_registry(self.hass)
-            for entity in listened_entities:
-                entity_entry = er.async_get(entity)
-                if models[model_identity].get(entity_entry.domain, None) is None:
-                    models[model_identity][entity_entry.domain] = set([])
-                
-                if entity_entry.original_device_class is not None:
-                    models[model_identity][entity_entry.domain].add(entity_entry.original_device_class)
+            # update runtime information for new entities configuration without
+            # the need to revalidate or re-read from file
+            await self.config_entry.runtime_data.async_update_listened_entities(
+                self.__current_connector_entity,
+                listened_entities,
+                user_input.get("poll_time_s")
+            )
             
-            model_domains_map: dict[str, list[DomainDeviceClass]] = {
-                model_identity: []
-            }
-            
-            for domain in models[model_identity].keys():
-                domain_class = DomainDeviceClass(
-                    domain,
-                    list(models[model_identity][domain])
-                )
-                model_domains_map[model_identity].append(domain_class)
-            
-            device_classes = model_domains_map[device_info.model_identity]
-            latest_schema = create_schema(device_classes)
-            
-            # Fetch current collections and schema
-            response = await self.hass.async_add_executor_job(self.config_entry.runtime_data.manager.fetch_collections)
-            collections_data = response.get("data", [])
-            
-            existing_schema = None
-            collection_id = None
-            colection_name = None
-            
-            for collection in collections_data:
-                # filters only homeassistant collections
-                if collection["name"] == f"hass.{device_info.model_identity}":
-                    existing_schema = collection.get("schema_fields").keys()
-                    colection_name = collection.get("name")
-                    collection_id = collection.get("id")
-            
-            # check for different schema.
-            # call update schema API if needed
-            missing_columns = set(latest_schema.keys()).difference(existing_schema)
-            if len(missing_columns) > 0:
-                await self.config_entry.runtime_data.manager.async_update_collection_task(
-                    collection_id, latest_schema, colection_name)
-            
-            
-            # mutate Task in the runtime task info list
-            device_info.listened_entities = listened_entities
-            device_info.poll_time_s = user_input["poll_time_s"]
+            if prev_poll_time_s != user_input.get("poll_time_s"):
+                pass
             
             self.__current_connector_entity = ""
             return self.async_create_entry(
