@@ -17,7 +17,7 @@ from homeassistant.helpers.typing import ConfigType
 from .const import CONF_PROJECT_ID, CONF_PROJECT_NAME, CONF_SERIAL_NUMBER, DOMAIN, HYPERBASE_CONFIG, LOGGER
 from .common import HyperbaseCoordinator
 from homeassistant.helpers.device_registry import async_get as async_get_device_registry
-from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
+# from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 
 
 HyperbaseConfigEntry = ConfigEntry["HyperbaseCoordinator"]

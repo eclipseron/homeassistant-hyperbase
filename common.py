@@ -437,7 +437,7 @@ class HyperbaseProjectManager:
         response = None
         base_url = self.entry.data[CONF_BASE_URL]
         try:
-            with httpx.Client(headers=headers) as session:
+            with httpx.Client(headers=headers, verify=False) as session:
                 response = session.patch(f"{base_url}/api/rest/project/{self.__hyperbase_project_id}/collection/{collection_id}",
                         json={
                             "schema_fields": schema,
@@ -459,12 +459,9 @@ class HyperbaseProjectManager:
             }
         response = None
         base_url = self.entry.data[CONF_BASE_URL]
-        api_token_id = self.entry.data.get(CONF_API_TOKEN)
-        
-        is_success = False
         created_collection: str = ""
         try:
-            with httpx.Client(headers=headers) as session:
+            with httpx.Client(headers=headers, verify=False) as session:
                 response = session.post(f"{base_url}/api/rest/project/{self.__hyperbase_project_id}/collection",
                         json={
                             "name": "hass." + entity_domain,
@@ -473,32 +470,17 @@ class HyperbaseProjectManager:
                         }
                     )
                 response.raise_for_status()
-                is_success = True
-                LOGGER.info(f"({self.entry.data[CONF_PROJECT_NAME]}) create new collection: hass.{entity_domain}")
                 
-                # insert new rule for api token to insert into created collection
                 result = response.json()
                 data = result.get("data")
                 created_collection = data.get("name")
                 created_collection_id = data.get("id")
-                response = session.post(f"{base_url}/api/rest/project/{self.__hyperbase_project_id}/token/{api_token_id}/collection_rule",
-                        json={
-                            "collection_id": created_collection_id,
-                            "find_one": "none",
-                            "find_many": "none",
-                            "insert_one": True,
-                            "update_one": "none",
-                            "delete_one": "none"
-                        }
-                    )
-                response.raise_for_status()
+                LOGGER.info(f"({self.entry.data[CONF_PROJECT_NAME]}) create new collection: hass.{entity_domain}")
                 self.__collections[created_collection.removeprefix("hass.")] = created_collection_id
         except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
             raise HyperbaseRESTConnectivityError(exc.args)
         except httpx.HTTPStatusError as exc:
-            if not is_success:
-                raise HyperbaseHTTPError(exc.response.json()['error']['message'], status_code=exc.response.status_code)
-            LOGGER.warning(f"({self.entry.data[CONF_PROJECT_NAME]}) Failed to create new rule for collection {created_collection}. Please add it manually in the Hyperbase.")
+            raise HyperbaseHTTPError(exc.response.json()['error']['message'], status_code=exc.response.status_code)
         return response
 
 
@@ -509,7 +491,7 @@ class HyperbaseProjectManager:
         """
         result = None
         try:
-            with httpx.Client() as client:
+            with httpx.Client(verify=False) as client:
                 if not self.entry.data["auth_token"]:
                     raise HyperbaseRESTConnectionError("Token not found", 401)
                 client.headers.update({
@@ -673,7 +655,6 @@ class Task:
 
     async def async_post_data(self, collection_id: str, payload: dict):
         """Post data to Hyperbase collection."""
-        verify_ssl = str(self.__project_manager.base_url).startswith("https://")
         headers = {
             "Authorization": f"Bearer {self.__project_manager.auth_token}",
             "Content-Type": "application/json; charset=utf-8",
@@ -681,7 +662,7 @@ class Task:
             "Connection": "close",
         }
         try:
-            session = get_async_client(self.hass, verify_ssl=verify_ssl)
+            session = get_async_client(self.hass, verify_ssl=False)
             response = await session.post(
                 f"{self.__project_manager.base_url}/api/rest/project/{self.__project_id}/collection/{collection_id}/record",
                 json=payload,
