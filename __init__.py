@@ -14,9 +14,7 @@ hello_world:
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.typing import ConfigType
-# from homeassistant.helpers.
-from uuid import uuid4
-from .const import CONF_MQTT_ADDRESS, CONF_MQTT_PORT, CONF_MQTT_TOPIC, CONF_PROJECT_ID, CONF_PROJECT_NAME, CONF_SERIAL_NUMBER, DOMAIN, HYPERBASE_CONFIG, LOGGER
+from .const import CONF_PROJECT_ID, CONF_PROJECT_NAME, CONF_SERIAL_NUMBER, DOMAIN, HYPERBASE_CONFIG, LOGGER
 from .common import HyperbaseCoordinator
 from homeassistant.helpers.device_registry import async_get as async_get_device_registry
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
@@ -39,18 +37,12 @@ async def async_setup_entry(
         serial_number=entry.data[CONF_SERIAL_NUMBER]
     )
     
-    mqtt_address = entry.data[CONF_MQTT_ADDRESS]
-    mqtt_port = entry.data[CONF_MQTT_PORT]
-    mqtt_topic = entry.data[CONF_MQTT_TOPIC]
     project_name = entry.data[CONF_PROJECT_NAME]
     project_id = entry.data[CONF_PROJECT_ID]
     
     entry.runtime_data = HyperbaseCoordinator(
         hass,
         hyperbase.id,
-        mqtt_address,
-        mqtt_port,
-        mqtt_topic,
         project_id,
         project_name,
         hyperbase.serial_number,

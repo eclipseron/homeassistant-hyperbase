@@ -1,4 +1,6 @@
 import logging
+
+from paho.mqtt.enums import CallbackAPIVersion
 from homeassistant.core import HomeAssistant
 from paho.mqtt import client as mqtt
 import asyncio
@@ -34,11 +36,12 @@ class MQTT:
 
     def init_client(self):
         """Initialize paho client."""
-        proto = mqtt.MQTTv311
-        self._mqttc = mqtt.Client(protocol=proto)
+        proto = mqtt.MQTTv5
+        self._mqttc = mqtt.Client(callback_api_version= CallbackAPIVersion.VERSION2, protocol=proto)
 
         self._mqttc.on_connect = self._mqtt_on_connect
         self._mqttc.on_disconnect = self._mqtt_on_disconnect
+        self._mqttc.on_publish = self._mqtt_on_publish
 
     async def async_publish(
         self, topic: str=None, payload: mqtt.PayloadType=None, qos: int=None, retain: bool=None
@@ -74,19 +77,19 @@ class MQTT:
             self._mqttc.disconnect()
             self._mqttc.loop_stop()
 
-    def _mqtt_on_connect(self, _mqttc, _userdata, _flags, result_code: int) -> None:
+    def _mqtt_on_connect(self, client, userdata, connect_flags, reason_code, properties) -> None:
         """
         Connect Callback
         
         Function called when the client connected to the broker.
         """
-        if result_code != mqtt.CONNACK_ACCEPTED:
-            return result_code
+        if reason_code != mqtt.CONNACK_ACCEPTED:
+            return reason_code
         self.connected = True
         dispatcher_send(self.hass, MQTT_CONNECTED)
 
 
-    def _mqtt_on_disconnect(self, _mqttc, _userdata, result_code: int) -> None:
+    def _mqtt_on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties) -> None:
         """
         Disconnect Callback
         
@@ -95,3 +98,15 @@ class MQTT:
         self.connected = False
         self._mqttc = None
         dispatcher_send(self.hass, MQTT_DISCONNECTED)
+    
+    
+    def _mqtt_on_publish(self, client, userdata, mid, reason_code, properties) -> None:
+        """
+        Publish Callback
+        
+        Function called when the client published a message to the broker.
+        """
+        if reason_code != mqtt.MQTT_ERR_SUCCESS:
+            _LOGGER.error("MQTT publish failed with reason code: %s", reason_code)
+            return
+        _LOGGER.debug("MQTT message published successfully with mid: %s", mid)

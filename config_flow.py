@@ -469,23 +469,37 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
             entry.capabilities["listened_entities"] = listened_entities
             prev_state = self.hass.states.get(self.__current_connector_entity)
             
+            # self.hass.config.
+            entity = er.async_update_entity(
+                entity_id=entry.entity_id,
+                capabilities=entry.capabilities,
+                config_entry_id=self.config_entry.entry_id,
+                device_id=self.config_entry.runtime_data.hyperbase_device_id,
+                has_entity_name=True,
+                original_name=entry.original_name,
+                new_entity_id=entry.entity_id,
+                new_unique_id=entry.unique_id,
+            )
+            
             # set updated configuration into corresponding entity attributes.
             # awaits the execution to make sure the attributes is updated before
             # continue the operation.
             await self.hass.async_add_executor_job(self.hass.states.set,
-                self.__current_connector_entity, prev_state.state, entry.capabilities, True)
+                entity.entity_id, prev_state.state, entity.capabilities, True)
             
             
             # update runtime information for new entities configuration without
             # the need to revalidate or re-read from file
-            await self.config_entry.runtime_data.async_update_listened_entities(
+            device_info = await self.config_entry.runtime_data.async_update_listened_entities(
                 self.__current_connector_entity,
                 listened_entities,
                 user_input.get("poll_time_s")
             )
             
             if prev_poll_time_s != user_input.get("poll_time_s"):
-                pass
+                # if poll time is changed, we need to reload the runtime task
+                await self.config_entry.runtime_data.async_reload_task(device_info)
+            
             
             self.__current_connector_entity = ""
             return self.async_create_entry(
