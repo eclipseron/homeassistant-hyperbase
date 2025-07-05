@@ -643,7 +643,7 @@ class Task:
             if state is None or state.state == "unavailable":
                 continue
             entity_entry = er.async_get(entity)
-            entity_data = parse_entity_data(entity_entry, state.state)
+            entity_data = parse_entity_data(entity_entry, state)
             if entity_data is not None:
                 _field_with_data.add(list(entity_data.keys())[0])
                 self.__prev_data = {**self.__prev_data, **entity_data}
@@ -713,7 +713,7 @@ class Task:
             if state is None or state.state == "unavailable":
                 continue
             entity_entry = er.async_get(entity)
-            entity_data = parse_entity_data(entity_entry, state.state)
+            entity_data = parse_entity_data(entity_entry, state)
             if entity_data is not None:
                 sent_data = {**sent_data, **entity_data}
         
