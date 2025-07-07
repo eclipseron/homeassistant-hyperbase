@@ -47,10 +47,10 @@ async def async_setup_entry(
         project_name,
         hyperbase.serial_number,
     )
-    await entry.runtime_data.async_startup()
+    is_succeed = await entry.runtime_data.async_startup()
     
     entry.async_on_unload(entry.add_update_listener(update_listener))
-    return True
+    return is_succeed
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: HyperbaseConfigEntry) -> bool:
