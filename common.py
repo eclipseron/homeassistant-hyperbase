@@ -111,11 +111,10 @@ class HyperbaseCoordinator:
         return self.__connectors
 
 
-    async def async_add_new_listened_device(self, connector: HyperbaseConnectorEntry, entity_id: str):
+    async def async_add_new_listened_device(self, connector: HyperbaseConnectorEntry):
         """
         Add new listened device into the runtime.
         """
-        # device.hyperbase_entity_id = entity_id
         self.__connectors.append(connector)
         if connector._collection_name is None:
             raise Exception("device model identity is not exist")

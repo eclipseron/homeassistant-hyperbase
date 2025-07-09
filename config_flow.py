@@ -200,41 +200,6 @@ class HyperbaseConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
             description_placeholders=placeholders
         )
-    
-    # async def async_step_reconfigure(self, user_input: Optional[Dict[str, Any]] = None):
-    #     """Step to reconfigure MQTT connection to Hyperbase"""
-    #     errors = {}
-        
-    #     # retrieve previous entry
-    #     entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
-    #     new_entry = entry
-    #     if new_entry is None:
-    #         LOGGER.error("No previous entry found for reconfiguration")
-    #         return self.async_abort(reason="no_previous_entry")
-        
-    #     if user_input is not None:
-            
-    #         await self.async_set_unique_id(new_entry.data[CONF_PROJECT_ID])
-    #         self._abort_if_unique_id_mismatch()
-    #         return self.async_update_reload_and_abort(
-    #             title=new_entry.data[CONF_PROJECT_NAME],
-    #             entry=new_entry,
-    #             data_updates={},
-    #         )
-    #     else:
-    #         user_input = {}
-        
-    #     return self.async_show_form(
-    #         step_id="reconfigure", 
-    #         data_schema=vol.Schema(
-    #             {
-    #                 vol.Required(CONF_MQTT_ADDRESS, default=new_entry.data[CONF_MQTT_ADDRESS]): str,
-    #                 vol.Required(CONF_MQTT_PORT, default=new_entry.data[CONF_MQTT_PORT]): cv.port,
-    #                 vol.Required(CONF_MQTT_TOPIC, default=new_entry.data[CONF_MQTT_TOPIC]): str,
-    #             }
-    #         ),
-    #         errors=errors
-    #     )
 
 
 CONF_ADD_DEVICE = "add_device"
@@ -316,23 +281,6 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
             }),
         )
     
-    
-    async def __update_entity_capabilities(self, entity_id: str, capabilities: dict[str, Any], prev_state: State):
-        er = async_get_entity_registry(self.hass)
-        entity = er.async_update_entity(
-            entity_id=entity_id,
-            capabilities=capabilities,
-            # config_entry_id=self.config_entry.entry_id,
-            # device_id=self.config_entry.runtime_data.hyperbase_device_id,
-            # has_entity_name=True,
-            # original_name=entry.original_name,
-        )
-        
-        # set updated configuration into corresponding entity attributes.
-        # awaits the execution to make sure the attributes is updated before
-        # continue the operation.
-        await self.hass.async_add_executor_job(self.hass.states.set,
-            entity.entity_id, prev_state.state, entity.capabilities, True)
     
     async def async_step_manage_connector(self, user_input: Optional[Dict[str, Any]]=None):
         er = async_get_entity_registry(self.hass)
@@ -507,7 +455,7 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
                     poll_time_s=user_input.get("poll_time_s"),
                 )
                 
-                await self.config_entry.runtime_data.async_add_new_listened_device(connector, entry.entity_id)
+                await self.config_entry.runtime_data.async_add_new_listened_device(connector)
                 
                 hyperbase = await async_get_hyperbase_registry(self.hass)
                 await hyperbase.async_store_connector_entry(connector)
