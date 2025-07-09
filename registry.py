@@ -71,6 +71,43 @@ class HyperbaseRegistry:
         return entries
     
     
+    async def async_update_connector_entries(
+        self,
+        connector_entity_id: str,
+        listened_entities: str,
+        poll_time_s: int
+    ) -> HyperbaseConnectorEntry:
+        prev_entry = self._entry_json.get(connector_entity_id).copy()
+        
+        new_entry = {
+            "project_id": prev_entry.get("project_id"),
+            "listened_device": prev_entry.get("listened_device"),
+            "listened_entities": listened_entities,
+            "poll_time_s": poll_time_s
+        }
+        
+        self._entry_json[connector_entity_id] = new_entry
+        await self.hass.async_add_executor_job(save_json, DEFAULT_CONFIG_PATH, self._entry_json)
+        return HyperbaseConnectorEntry(
+            hass=self.hass,
+            connector_entity_id=connector_entity_id,
+            listened_device=prev_entry.get("listened_device"),
+            listened_entities=listened_entities,
+            poll_time_s=poll_time_s,
+            project_id=prev_entry.get("project_id"),
+        )
+    
+    
+    def get_connector_entries_for_project(self, project_id: str) -> list[HyperbaseConnectorEntry]:
+        entries: list[HyperbaseConnectorEntry] = []
+        
+        for connector_entity_id in self._entry_json.keys():
+            if self._entry_json[connector_entity_id].get("project_id") == project_id:
+                connector = self.get_connector_entry(connector_entity_id)
+                entries.append(connector)
+        
+        return entries
+    
     async def async_create_connector_entry(
         self,
         connector_entity_id: str,

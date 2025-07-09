@@ -8,7 +8,7 @@ import httpx
 
 
 from .models import DomainDeviceClass, create_schema, parse_entity_data
-from homeassistant.const import CONF_API_TOKEN, EVENT_HOMEASSISTANT_STARTED, EVENT_HOMEASSISTANT_STOP
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_HOMEASSISTANT_STOP
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_time_interval
@@ -20,7 +20,7 @@ from .const import (
 )
 from .exceptions import HyperbaseRESTConnectionError
 from homeassistant.helpers.device_registry import async_get as async_get_device_registry
-from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry, async_entries_for_device
+from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 from homeassistant.helpers.httpx_client import get_async_client
 from .registry import HyperbaseConnectorEntry, async_get_hyperbase_registry
 
@@ -87,26 +87,27 @@ class HyperbaseCoordinator:
             return False
         
         LOGGER.info(f"({self.__project_name}) Startup: Hyperbase collections revalidated")
-        LOGGER.info(f"({self.__project_name}) Startup: Waiting for Home Assistant to start before loading runtime tasks")
-        self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, self.__async_startup_load_runtime_tasks)
+        if self.hass.is_running:
+            await self.__async_startup_load_runtime_tasks()
+        else:
+            LOGGER.info(f"({self.__project_name}) Startup: Waiting for Home Assistant to start before loading runtime tasks")
+            self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, self.__async_startup_load_runtime_tasks)
         self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, self.disconnect)
         return True
 
     
     async def __async_startup_load_runtime_tasks(self, _=None):
         await self.task_manager.async_load_runtime_tasks(self.__connectors)
+        LOGGER.info(f"({self.__project_name}) Running: Data logging is active. Please check your hyperbase instance to verify.")
 
     async def reload_listened_devices(self) -> list[HyperbaseConnectorEntry]:
         """Reload listened devices and return updated list of HyperbaseConnectorEntry to be used later"""
         self.__connectors = []
-        er = async_get_entity_registry(self.hass)
-        entity_entries = async_entries_for_device(er, self.hyperbase_device_id)
         
         hyp = await async_get_hyperbase_registry(self.hass)
+        _conn = hyp.get_connector_entries_for_project(self.manager.project_id)
+        self.__connectors = _conn.copy()
 
-        for connector_entity in entity_entries:
-            conn = hyp.get_connector_entry(connector_entity.entity_id)
-            self.__connectors.append(conn)
         return self.__connectors
 
 
@@ -149,7 +150,7 @@ class HyperbaseCoordinator:
         connector_entity: str,
         listened_entities: list[str],
         poll_time_s: int
-        ):
+        ) -> HyperbaseConnectorEntry:
         
         connector = self.task_manager.get_active_connector_by_id(connector_entity)
         model_identity = connector._collection_name
@@ -191,7 +192,7 @@ class HyperbaseCoordinator:
         
         for collection in collections_data:
             # filters only homeassistant collections
-            if collection["name"] == f"hass.{device_info.model_identity}":
+            if collection["name"] == f"hass.{connector._collection_name}":
                 existing_schema = collection.get("schema_fields")
                 collection_name = collection.get("name")
                 collection_id = collection.get("id")
@@ -206,18 +207,18 @@ class HyperbaseCoordinator:
         # mutate Task in the runtime task info list
         # idk if it is best practice or not, duhh..
         # if it is working, I ain't touching that anymore
-        device_info.listened_entities = listened_entities
-        device_info.poll_time_s = poll_time_s
+        connector._listened_entities = listened_entities
+        connector._poll_time_s = poll_time_s
         
         # use returned device_info to cancel and reload runtime task
         # if needed.
-        return device_info
+        return connector
 
 
-    async def async_reload_task(self, device: ListenedDeviceInfo):
-        self._cancel_runtime_task(device.hyperbase_entity_id)
+    async def async_reload_task(self, connector: HyperbaseConnectorEntry):
+        self._cancel_runtime_task(connector._connector_entity_id)
         await asyncio.sleep(1) # wait for task cancelation
-        await self.task_manager.async_load_runtime_tasks([device])
+        await self.task_manager.async_load_runtime_tasks([connector])
 
 
     def _cancel_runtime_task(self, key: str):
@@ -276,13 +277,14 @@ class HyperbaseCoordinator:
     async def disconnect(self, _=None):
         """Disonnects to MQTT Broker"""
         self.unloading = True
-        self.task_manager.cancel_waiting_tasks()
         tasks = self.task_manager.runtime_tasks
         task_info = self.task_manager.runtime_task_info
         for connector_id in tasks.keys():
+            self.task_manager.cancel_waiting_tasks(connector_id)
             task = tasks[connector_id] # terminate all tasks
             task()
-            del task_info[connector_id]
+            if task_info.get(connector_id) is not None:
+                del task_info[connector_id]
 
     @property
     def is_connected(self):
@@ -589,7 +591,7 @@ class Task:
         ))
         
         # append post task to callback. invoked when shutting down if post task still running
-        self.cancel_callback(task)
+        self.cancel_callback(self.connector._connector_entity_id, task)
 
 
     async def async_publish_reload_status(self):
@@ -625,7 +627,7 @@ class Task:
         ))
         
         # append post task to callback. invoked when shutting down if post task still running
-        self.cancel_callback(task)
+        self.cancel_callback(self.connector._connector_entity_id, task)
 
 
     async def async_post_data(self, payload: dict):
@@ -681,7 +683,7 @@ class HyperbaseTaskManager:
         self.__runtime_task_info: dict[str, Task] = {}
         self.__project_manager = project_manager
         self.__connector_serial_number = connector_serial_number
-        self.__waiting_tasks = []
+        self.__waiting_tasks: dict[str, list[Any]] = {}
 
 
     async def async_load_runtime_tasks(self, connectors: list[HyperbaseConnectorEntry]):
@@ -719,14 +721,15 @@ class HyperbaseTaskManager:
         return self.__runtime_task_info.get(connector_entity).connector
 
 
-    def _append_waiting_tasks_callback(self, task):
-        self.__waiting_tasks.append(task)
+    def _append_waiting_tasks_callback(self, connector_id: str, task):
+        if self.__waiting_tasks.get(connector_id) is None:
+            self.__waiting_tasks[connector_id] = []
+        self.__waiting_tasks[connector_id].append(task)
 
 
-    def cancel_waiting_tasks(self):
-        for task in self.__waiting_tasks:
-            if not task.done():
-                task.cancel()
+    def cancel_waiting_tasks(self, connector_id):
+        for task in self.__waiting_tasks.get(connector_id):
+            task.cancel()
 
     @property
     def runtime_tasks(self):

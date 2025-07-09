@@ -334,13 +334,15 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_manage_connector(self, user_input: Optional[Dict[str, Any]]=None):
         er = async_get_entity_registry(self.hass)
         
-        entry = er.async_get(self.__current_connector_entity)
+        hyp = await async_get_hyperbase_registry(self.hass)
+        connector = hyp.get_connector_entry(self.__current_connector_entity)
+        
         
         listened_entity_domains: dict[str, list[str]] = {}
-        listened_entities: list = entry.capabilities.get("listened_entities")
-        prev_poll_time_s: int = entry.capabilities.get("poll_time_s")
+        listened_entities: list = connector._listened_entities
+        prev_poll_time_s: int = connector._poll_time_s
         
-        entity_entries = async_entries_for_device(er, entry.capabilities.get("listened_device"))
+        entity_entries = async_entries_for_device(er, connector._listened_device)
         for default_entity in entity_entries:
             if default_entity.original_device_class is None:
                 _available_entities = listened_entity_domains.get(default_entity.domain, [])
@@ -373,7 +375,7 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
             })
         
         schema = schema.extend({
-            vol.Required("poll_time_s", default=entry.capabilities.get("poll_time_s", 5)): int,
+            vol.Required("poll_time_s", default=connector._poll_time_s): int,
         })
         
         errors={}
@@ -385,15 +387,16 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
                 if input_key == "poll_time_s":
                     continue
                 listened_entities.append(user_input.get(input_key))
-            entry.capabilities["poll_time_s"] = user_input["poll_time_s"]
-            entry.capabilities["listened_entities"] = listened_entities
             prev_state = self.hass.states.get(self.__current_connector_entity)
+            _updated = {
+                "listened_entities": listened_entities,
+                "poll_time_s": user_input["poll_time_s"]
+            }
             
-            self.hass.add_job(self.__update_entity_capabilities,
-                self.__current_connector_entity,
-                entry.capabilities,
-                prev_state
-            )
+            new_state_attr = {**prev_state.attributes, **_updated}
+
+            await self.hass.async_add_executor_job(self.hass.states.set,
+            connector._connector_entity_id, prev_state.state, new_state_attr, True)
             
             
             # update runtime information for new entities configuration without
@@ -408,6 +411,9 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
                 # if poll time is changed, we need to reload the runtime task
                 await self.config_entry.runtime_data.async_reload_task(device_info)
             
+            await hyp.async_update_connector_entries(
+                connector._connector_entity_id, listened_entities, user_input.get("poll_time_s")
+            )
             
             self.__current_connector_entity = ""
             return self.async_create_entry(
