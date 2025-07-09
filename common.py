@@ -225,9 +225,12 @@ class HyperbaseCoordinator:
         """Cancel task and clear info from runtime dictionary"""
         tasks = self.task_manager.runtime_tasks
         task_info = self.task_manager.runtime_task_info
+        
+        self.task_manager.cancel_waiting_tasks(key)
         cancel = tasks[key]
-        cancel()
-        del task_info[key]
+        cancel() # terminate all tasks
+        if task_info.get(key) is not None:
+            del task_info[key]
 
 
     async def __async_verify_device_models(self):
@@ -278,13 +281,8 @@ class HyperbaseCoordinator:
         """Disonnects to MQTT Broker"""
         self.unloading = True
         tasks = self.task_manager.runtime_tasks
-        task_info = self.task_manager.runtime_task_info
         for connector_id in tasks.keys():
-            self.task_manager.cancel_waiting_tasks(connector_id)
-            task = tasks[connector_id] # terminate all tasks
-            task()
-            if task_info.get(connector_id) is not None:
-                del task_info[connector_id]
+            self._cancel_runtime_task(connector_id)
 
     @property
     def is_connected(self):

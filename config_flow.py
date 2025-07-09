@@ -239,7 +239,7 @@ class HyperbaseConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 CONF_ADD_DEVICE = "add_device"
 CONF_MANAGE_DEVICE = "manage_device"
-CONF_REMOVE_DEVICE = "config_device"
+CONF_REMOVE_DEVICE = "delete_device"
 
 CONF_ACTIONS = {
     CONF_ADD_DEVICE: "Register New Device",
@@ -258,11 +258,12 @@ class ListenedEntityDomain:
 class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
     __current_device = ""
     __current_connector_entity = ""
+    __action = ""
     
     async def async_step_init(self, user_input: Optional[Dict[str, str]]=None):
         if user_input is not None:
-            action = user_input.get(CONF_ACTION)
-            if action == CONF_MANAGE_DEVICE or action == CONF_REMOVE_DEVICE:
+            self.__action = user_input.get(CONF_ACTION)
+            if self.__action == CONF_MANAGE_DEVICE or self.__action == CONF_REMOVE_DEVICE:
                 return await self.async_step_select_connector()
             return await self.async_step_select_device()
         return self.async_show_form(
@@ -299,6 +300,8 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
         
         if user_input is not None:
             self.__current_connector_entity = user_input.get(CONF_ENTITY_ID)
+            if self.__action == CONF_REMOVE_DEVICE:
+                return await self.async_step_remove_device()
             return await self.async_step_manage_connector()
         else:
             user_input = {}
@@ -531,21 +534,18 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
     
     async def async_step_remove_device(self, user_input: Optional[Dict[str, Any]]=None):
         er = async_get_entity_registry(self.hass)
-        entries = er.entities.get_entries_for_config_entry_id(self.config_entry.entry_id)
-        entity_id = ""
+        
+        hyp = await async_get_hyperbase_registry(self.hass)
         
         errors = {}
         
-        for e in entries:
-            if e.capabilities["listened_device"] == self.__current_device:
-                entity_id = e.entity_id
-                break
-        
         if user_input is not None:
-            if user_input[CONF_REMOVE_DEVICE_CONFIRM] != entity_id:
+            if user_input.get(CONF_REMOVE_DEVICE_CONFIRM) != self.__current_connector_entity:
                 errors["base"] = "invalid_id"
             else:
-                er.async_remove(entity_id)
+                er.async_remove(self.__current_connector_entity)
+                await hyp.async_delete_connector_entry(self.__current_connector_entity)
+                self.config_entry.runtime_data._cancel_runtime_task(self.__current_connector_entity)
                 
                 return self.async_create_entry(
                     title="remove_device_config",
@@ -557,7 +557,7 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="remove_device",
             data_schema=vol.Schema({
-                vol.Required(CONF_REMOVE_DEVICE_CONFIRM, default=user_input.get(CONF_REMOVE_DEVICE_CONFIRM, entity_id)): str
+                vol.Required(CONF_REMOVE_DEVICE_CONFIRM): str
             }),
             errors=errors
         )

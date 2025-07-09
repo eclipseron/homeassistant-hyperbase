@@ -1,5 +1,6 @@
 import os
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from .const import LOGGER, DOMAIN
 from homeassistant.helpers.json import save_json
 from homeassistant.util.json import load_json_object
@@ -152,3 +153,14 @@ class HyperbaseRegistry:
         }
         await self.hass.async_add_executor_job(save_json, DEFAULT_CONFIG_PATH, self._entry_json)
         return connector
+
+    
+    async def async_delete_connector_entry(self, connector_entity_id: str):
+        if self._entry_json.get(connector_entity_id) is None:
+            raise ConnectoryEntryNotExists
+        del self._entry_json[connector_entity_id]
+        await self.hass.async_add_executor_job(save_json, DEFAULT_CONFIG_PATH, self._entry_json)
+
+
+class ConnectoryEntryNotExists(HomeAssistantError):
+    """Connector entry is not exists in Hyperbase config file."""
