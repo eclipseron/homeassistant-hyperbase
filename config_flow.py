@@ -395,6 +395,11 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
         entity_entries = async_entries_for_device(er, self.__current_device)
         for entry in entity_entries:
             if entry.original_device_class is None:
+                if entry.translation_key is not None:
+                    _available_entities = listened_entity_domains.get(f"{entry.domain}.{entry.translation_key}", [])
+                    _available_entities.append(entry.entity_id)
+                    listened_entity_domains[f"{entry.domain}.{entry.translation_key}"] = _available_entities
+                    continue
                 _available_entities = listened_entity_domains.get(entry.domain, [])
                 _available_entities.append(entry.entity_id)
                 listened_entity_domains[entry.domain] = _available_entities
@@ -447,10 +452,9 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
                     )
                 
                 connector = HyperbaseConnectorEntry(
-                    hass = self.hass,
                     connector_entity_id=entry.entity_id,
                     project_id=self.config_entry.data.get(CONF_PROJECT_ID),
-                    listened_device=self.__current_device,
+                    listened_device=registering_device,
                     listened_entities=listened_entities,
                     poll_time_s=user_input.get("poll_time_s"),
                 )

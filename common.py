@@ -3,6 +3,7 @@ from datetime import timedelta
 import datetime
 import json
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -166,6 +167,10 @@ class HyperbaseCoordinator:
             
             if entity_entry.original_device_class is not None:
                 models[model_identity][entity_entry.domain].add(entity_entry.original_device_class)
+                continue
+            
+            if entity_entry.translation_key is not None:
+                models[model_identity][entity_entry.domain].add(entity_entry.translation_key)
         
         model_domains_map: dict[str, list[DomainDeviceClass]] = {
             model_identity: []
@@ -260,6 +265,10 @@ class HyperbaseCoordinator:
                 
                 if entity.original_device_class is not None:
                     models[model_identity][entity.domain].add(entity.original_device_class)
+                    continue
+                
+                if entity.translation_key is not None:
+                    models[model_identity][entity.domain].add(entity.translation_key)
         
         model_domains_map: dict[str, list[DomainDeviceClass]] = {}
         for model_name in models.keys():
@@ -282,6 +291,9 @@ class HyperbaseCoordinator:
         tasks = self.task_manager.runtime_tasks
         for connector_id in tasks.keys():
             self._cancel_runtime_task(connector_id)
+        
+        # cancel retry task
+        self.task_manager.cancel_retry_tasks()
 
     @property
     def is_connected(self):
@@ -522,6 +534,7 @@ class Task:
         project_id: str,
         project_name: str,
         cancel_callback,
+        retry_callback,
     ):
         self.hass = hass
         self.connector = connector
@@ -535,12 +548,15 @@ class Task:
         self.__collection_name = collection_name
         self.__collection_id = collection_id
         self.cancel_callback = cancel_callback
+        self.retry_callback =retry_callback
 
 
     async def async_publish_on_tick(self, *args):
         er = async_get_entity_registry(self.hass)
         dr = async_get_device_registry(self.hass)
-        device_entry = dr.async_get(self.connector._listened_device)
+        device_entry = dr.async_get(self.connector._listened_device.id)
+        if device_entry is None:
+            return
         
         sent_data = {
             "area_id": device_entry.area_id,
@@ -579,10 +595,11 @@ class Task:
         changed_fields = self.__prev_fields.difference(_field_with_data)
         if len(changed_fields) > 0:
             for changed_field in changed_fields:
-                self.__prev_data[changed_field] = None # reset value of changed field.
+                del self.__prev_data[changed_field]
         
         self.__prev_fields = _field_with_data.copy()
         
+        self.__prev_data["record_date"] = datetime.datetime.now(tz=ZoneInfo("UTC")).isoformat()
         task = self.hass.async_create_task(self.async_post_data(
             self.__prev_data,
         ))
@@ -598,7 +615,9 @@ class Task:
         """
         er = async_get_entity_registry(self.hass)
         dr = async_get_device_registry(self.hass)
-        device_entry = dr.async_get(self.connector._listened_device)
+        device_entry = dr.async_get(self.connector._listened_device.id)
+        if device_entry is None:
+            return
         
         sent_data = {
             "area_id": device_entry.area_id,
@@ -607,7 +626,8 @@ class Task:
             "name_by_user": device_entry.name_by_user,
             "name_default": device_entry.name,
             "product_id": device_entry.dict_repr["identifiers"][0][1],
-            "status": "reloaded"
+            "status": "reloaded",
+            "record_date": datetime.datetime.now(tz=ZoneInfo("UTC")).isoformat()
         }
         
         for entity in self.connector._listened_entities:
@@ -635,6 +655,13 @@ class Task:
             "Accept": "application/json",
             "Connection": "close",
         }
+        
+        backup = {
+            "collection_id": self.__collection_id,
+            "collection_name": self.__collection_name,
+            "payload": payload.copy()
+        }
+        
         try:
             session = get_async_client(self.hass, verify_ssl=False)
             response = await session.post(
@@ -644,12 +671,11 @@ class Task:
                 timeout=httpx.Timeout(10, connect=5, read=20, write=5)
             )
             response.raise_for_status()
-            
             self.hass.states.async_set(
                 self.connector._connector_entity_id,
                 new_state=datetime.datetime.now(),
                 attributes={
-                    "listened_device": self.connector._listened_device,
+                    "listened_device": self.connector._listened_device.id,
                     "listened_entities": self.connector._listened_entities,
                     "poll_time_s": self.connector._poll_time_s,
                     "model_identity": self.__collection_name,
@@ -658,13 +684,15 @@ class Task:
             )
         except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
             LOGGER.error(f"({self.__project_name}) Hyperbase connection failed on collection {self.__collection_name}: {exc}")
-            return
+            self.retry_callback(backup)
+        
         except httpx.HTTPStatusError as exc:
             LOGGER.error(f"({self.__project_name}) Failed to store data into collection {self.__collection_name}: {exc}")
-            return
+            LOGGER.info(exc.response.json())
+            self.retry_callback(backup)
+        
         except httpx.RemoteProtocolError as exc:
             LOGGER.warning(f"({self.__project_name}) Response malformed on hyperbase. Please check your data in collection {self.__collection_name}: {exc}")
-            return
 
 
 
@@ -681,6 +709,9 @@ class HyperbaseTaskManager:
         self.__project_manager = project_manager
         self.__connector_serial_number = connector_serial_number
         self.__waiting_tasks: dict[str, list[Any]] = {}
+        self.__failed_tasks: list[dict[str, Any]] = []
+        self.__retry_tasks = []
+        self.__retry_tracker = None
 
 
     async def async_load_runtime_tasks(self, connectors: list[HyperbaseConnectorEntry]):
@@ -699,7 +730,8 @@ class HyperbaseTaskManager:
                 connector_serial_number=self.__connector_serial_number,
                 project_id=self.__project_manager.project_id,
                 project_name=self.__project_manager.entry.data[CONF_PROJECT_NAME],
-                cancel_callback=self._append_waiting_tasks_callback
+                cancel_callback=self._append_waiting_tasks_callback,
+                retry_callback=self._append_retry_tasks_callback
             )
         self.__runtime_task_info[connector._connector_entity_id] = task
         
@@ -709,6 +741,12 @@ class HyperbaseTaskManager:
                 task.async_publish_on_tick,
                 interval=timedelta(seconds=connector._poll_time_s),
                 cancel_on_shutdown=True,
+            )
+        
+        self.__retry_tracker = async_track_time_interval(self.hass,
+                self.async_create_retry_task,
+                interval=timedelta(seconds=20),
+                cancel_on_shutdown=True
             )
 
 
@@ -724,10 +762,67 @@ class HyperbaseTaskManager:
         self.__waiting_tasks[connector_id].append(task)
 
 
+    def _append_retry_tasks_callback(self, failed_data: dict):
+        self.__failed_tasks.append(failed_data)
+
+
     def cancel_waiting_tasks(self, connector_id):
         for task in self.__waiting_tasks.get(connector_id):
             task.cancel()
 
+    
+    def cancel_retry_tasks(self):
+        for task in self.__retry_tasks:
+            task.cancel()
+        if self.__retry_tracker is not None:
+            self.__retry_tracker()
+
+    async def async_create_retry_task(self, _=None):
+        if len(self.__failed_tasks) < 1:
+            return
+        LOGGER.warning(f"({self.__project_manager.entry.data[CONF_PROJECT_NAME]}) Found {len(self.__failed_tasks)} failed data loggings. Scheduling for retry.")
+        for failed in self.__failed_tasks:
+            task = self.hass.async_create_task(self.async_retry_post_data(failed))
+            self.__retry_tasks.append(task)
+        
+        self.__failed_tasks.clear()
+    
+    
+    async def async_retry_post_data(self, failed_data):
+        """Post data to Hyperbase collection."""
+        collection_id = failed_data.get("collection_id")
+        collection_name = failed_data.get("collection_name")
+        project_name = self.__project_manager.entry.data[CONF_PROJECT_NAME]
+        data = failed_data.get("payload")
+        
+        headers = {
+            "Authorization": f"Bearer {self.__project_manager.auth_token}",
+            "Content-Type": "application/json; charset=utf-8",
+            "Accept": "application/json",
+            "Connection": "close",
+        }
+        
+        try:
+            session = get_async_client(self.hass, verify_ssl=False)
+            response = await session.post(
+                f"{self.__base_url}/api/rest/project/{self.__project_manager.project_id}/collection/{collection_id}/record",
+                json=data,
+                headers=headers,
+                timeout=httpx.Timeout(10, connect=5, read=20, write=5)
+            )
+            response.raise_for_status()
+        except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
+            LOGGER.error(f"({project_name}) Hyperbase connection failed on collection {collection_name}: {exc}")
+            self.__failed_tasks.append(failed_data)
+        
+        except httpx.HTTPStatusError as exc:
+            LOGGER.error(f"({project_name}) Failed to store data into collection {collection_name}: {exc}")
+            self.__failed_tasks.append(failed_data)
+        
+        except httpx.RemoteProtocolError as exc:
+            LOGGER.warning(f"({project_name}) Response malformed on hyperbase. Please check your data in collection {collection_name}: {exc}")
+    
+    
     @property
     def runtime_tasks(self):
         return self.__runtime_tasks

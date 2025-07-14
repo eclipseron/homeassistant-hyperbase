@@ -11,6 +11,7 @@ configuration.yaml file.
 hello_world:
 """
 
+from config.custom_components.hyperbase.registry import remove_registry
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.typing import ConfigType
@@ -48,7 +49,6 @@ async def async_setup_entry(
     )
     is_succeed = await entry.runtime_data.async_startup()
     
-    entry.async_on_unload(entry.add_update_listener(update_listener))
     return is_succeed
 
 
@@ -60,10 +60,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: HyperbaseConfigEntry) -
         entry.runtime_data = None
     return True
 
-
-async def update_listener(hass, entry):
-    LOGGER.info(entry.data)
-    """Handle options update."""
+async def async_remove_entry(hass: HomeAssistant, entry: HyperbaseConfigEntry):
+    """Delete all registered connector by project id"""
+    await remove_registry(hass, entry.unique_id)
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Initialize Hyperbase connection component."""

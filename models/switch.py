@@ -1,5 +1,5 @@
 from typing import Any
-from .base import BASE_COLUMNS, BaseModel
+from .base import BASE_COLUMNS
 
 
 
@@ -32,8 +32,3 @@ class SwitchEntityData:
             return {f"switch__{self.__device_class}": self.__state_value == "on"}
         else:
             return {f"switch__unknown": self.__state_value == "on"}
-
-
-
-class SwitchModel(BaseModel):
-    """asdasd"""

@@ -5,7 +5,7 @@ from .const import LOGGER, DOMAIN
 from homeassistant.helpers.json import save_json
 from homeassistant.util.json import load_json_object
 from .util import get_model_identity
-from homeassistant.helpers.device_registry import async_get as async_get_device_registry
+from homeassistant.helpers.device_registry import DeviceEntry, async_get as async_get_device_registry
 
 DEFAULT_CONFIG_PATH = "config/.storage/hyperbase.config"
 
@@ -18,12 +18,15 @@ async def async_get_hyperbase_registry(hass: HomeAssistant):
     return HyperbaseRegistry(hass, registry)
 
 
+async def remove_registry(hass: HomeAssistant, project_id: str):
+    hyp = await async_get_hyperbase_registry(hass)
+    await hyp.delete_connector_entry_by_project_id(project_id)
+
 class HyperbaseConnectorEntry:
     def __init__(self,
-        hass: HomeAssistant,
         connector_entity_id: str,
         project_id: str,
-        listened_device: str,
+        listened_device: DeviceEntry,
         listened_entities: list[str],
         poll_time_s: int,
         ):
@@ -33,9 +36,7 @@ class HyperbaseConnectorEntry:
         self._listened_entities = listened_entities
         self._poll_time_s = poll_time_s
         
-        dr = async_get_device_registry(hass)
-        device = dr.async_get(listened_device)
-        self._collection_name = get_model_identity(device)
+        self._collection_name = get_model_identity(self._listened_device)
 
 class HyperbaseRegistry:
     def __init__(self,
@@ -51,11 +52,14 @@ class HyperbaseRegistry:
         if entry is None:
             return None
 
+        dr = async_get_device_registry(self.hass)
+        listened_device = dr.async_get(entry.get("listened_device"))
+        if listened_device is None:
+            return None
         connector = HyperbaseConnectorEntry(
-            hass = self.hass,
             connector_entity_id = connector_entity_id,
             project_id = entry.get("project_id"),
-            listened_device = entry.get("listened_device"),
+            listened_device = listened_device,
             listened_entities = entry.get("listened_entities"),
             poll_time_s = entry.get("poll_time_s"),
         )
@@ -67,7 +71,8 @@ class HyperbaseRegistry:
         
         for connector_entity_id in self._entry_json.keys():
             connector = self.get_connector_entry(connector_entity_id)
-            entries.append(connector)
+            if connector is not None:
+                entries.append(connector)
         
         return entries
     
@@ -88,11 +93,15 @@ class HyperbaseRegistry:
         }
         
         self._entry_json[connector_entity_id] = new_entry
+        dr = async_get_device_registry(self.hass)
+        listened_device = dr.async_get(prev_entry.get("listened_device"))
+        if listened_device is None:
+            raise DeviceNotExists
+        
         await self.hass.async_add_executor_job(save_json, DEFAULT_CONFIG_PATH, self._entry_json)
         return HyperbaseConnectorEntry(
-            hass=self.hass,
             connector_entity_id=connector_entity_id,
-            listened_device=prev_entry.get("listened_device"),
+            listened_device=listened_device,
             listened_entities=listened_entities,
             poll_time_s=poll_time_s,
             project_id=prev_entry.get("project_id"),
@@ -105,14 +114,15 @@ class HyperbaseRegistry:
         for connector_entity_id in self._entry_json.keys():
             if self._entry_json[connector_entity_id].get("project_id") == project_id:
                 connector = self.get_connector_entry(connector_entity_id)
-                entries.append(connector)
+                if connector is not None:
+                    entries.append(connector)
         
         return entries
     
     async def async_create_connector_entry(
         self,
         connector_entity_id: str,
-        listened_device: str,
+        listened_device_id: str,
         listened_entities: list[str],
         project_id: str,
         poll_time_s: int,
@@ -126,10 +136,14 @@ class HyperbaseRegistry:
             "listened_entities": listened_entities,
             "poll_time_s": poll_time_s
         }
+        dr = async_get_device_registry(self.hass)
+        listened_device = dr.async_get(listened_device_id)
+        if listened_device is None:
+            raise DeviceNotExists
+        
         await self.hass.async_add_executor_job(save_json, DEFAULT_CONFIG_PATH, self._entry_json)
         
         connector = HyperbaseConnectorEntry(
-            hass = self.hass,
             connector_entity_id = connector_entity_id,
             project_id = project_id,
             listened_device = listened_device,
@@ -147,7 +161,7 @@ class HyperbaseRegistry:
         
         self._entry_json[connector._connector_entity_id] = {
             "project_id": connector._project_id,
-            "listened_device": connector._listened_device,
+            "listened_device": connector._listened_device.id,
             "listened_entities": connector._listened_entities,
             "poll_time_s": connector._poll_time_s
         }
@@ -160,7 +174,21 @@ class HyperbaseRegistry:
             raise ConnectoryEntryNotExists
         del self._entry_json[connector_entity_id]
         await self.hass.async_add_executor_job(save_json, DEFAULT_CONFIG_PATH, self._entry_json)
-
+    
+    
+    async def delete_connector_entry_by_project_id(self, project_id: str):
+        if self._entry_json == {}:
+            return
+        
+        _entry_json = self._entry_json.copy()
+        for connector_entity_id in self._entry_json.keys():
+            if self._entry_json[connector_entity_id].get("project_id") == project_id:
+                del _entry_json[connector_entity_id]
+        await self.hass.async_add_executor_job(save_json, DEFAULT_CONFIG_PATH, _entry_json)
 
 class ConnectoryEntryNotExists(HomeAssistantError):
     """Connector entry is not exists in Hyperbase config file."""
+
+
+class DeviceNotExists(HomeAssistantError):
+    """Operation over non existing device."""
