@@ -7,13 +7,14 @@ from homeassistant.util.json import load_json_object
 from .util import get_model_identity
 from homeassistant.helpers.device_registry import DeviceEntry, async_get as async_get_device_registry
 
-DEFAULT_CONFIG_PATH = "config/.storage/hyperbase.config"
+# DEFAULT_CONFIG_PATH = "config/.storage/hyperbase.config"
+DEFAULT_CONFIG_PATH = ".storage/hyperbase.config"
 
 
 async def async_get_hyperbase_registry(hass: HomeAssistant):
     is_exists = await hass.async_add_executor_job(os.path.exists, DEFAULT_CONFIG_PATH)
     if not is_exists:
-        hass.async_add_executor_job(save_json, DEFAULT_CONFIG_PATH, {})
+        await hass.async_add_executor_job(save_json, DEFAULT_CONFIG_PATH, {})
     registry = await hass.async_add_executor_job(load_json_object, DEFAULT_CONFIG_PATH)
     return HyperbaseRegistry(hass, registry)
 

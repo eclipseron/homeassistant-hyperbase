@@ -11,7 +11,7 @@ configuration.yaml file.
 hello_world:
 """
 
-from config.custom_components.hyperbase.registry import remove_registry
+from .registry import remove_registry
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.typing import ConfigType

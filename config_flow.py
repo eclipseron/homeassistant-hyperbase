@@ -293,7 +293,7 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
         listened_entities: list = connector._listened_entities
         prev_poll_time_s: int = connector._poll_time_s
         
-        entity_entries = async_entries_for_device(er, connector._listened_device)
+        entity_entries = async_entries_for_device(er, connector._listened_device.id)
         for default_entity in entity_entries:
             if default_entity.original_device_class is None:
                 _available_entities = listened_entity_domains.get(default_entity.domain, [])
