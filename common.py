@@ -24,9 +24,9 @@ from .const import (
     MQTT_CONNECTED,
     MQTT_DISCONNECTED,
 )
-from .exceptions import HyperbaseHTTPError, HyperbaseMQTTConnectionError, HyperbaseRESTConnectionError, HyperbaseRESTConnectivityError
+from .exceptions import HyperbaseMQTTConnectionError, HyperbaseRESTConnectionError
 from homeassistant.helpers.device_registry import DeviceEntry, async_get as async_get_device_registry
-from homeassistant.helpers.entity_registry import RegistryEntry, async_get as async_get_entity_registry, async_entries_for_device
+from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry, async_entries_for_device
 from .registry import HyperbaseConnectorEntry, async_get_hyperbase_registry
 
 class ListenedDeviceInfo:
@@ -211,8 +211,9 @@ class HyperbaseCoordinator:
         poll_time_s: int
         ):
         
-        device_info = self.task_manager.get_device_info_by_entity(connector_entity)
-        model_identity = device_info.model_identity
+        connector = self.task_manager.get_active_connector_by_id(connector_entity)
+        model_identity = connector._collection_name
+
         # construct schema for updated listened_entities.
         # It is used to check if hyperbase collection schema should update.
         models = {
@@ -246,7 +247,7 @@ class HyperbaseCoordinator:
             )
             model_domains_map[model_identity].append(domain_class)
         
-        device_classes = model_domains_map[device_info.model_identity]
+        device_classes = model_domains_map.get(model_identity)
         latest_schema = create_schema(device_classes)
         
         # Fetch current collections and schema
@@ -259,7 +260,7 @@ class HyperbaseCoordinator:
         
         for collection in collections_data:
             # filters only homeassistant collections
-            if collection["name"] == f"hass.{device_info.model_identity}":
+            if collection["name"] == f"hass.{model_identity}":
                 existing_schema = collection.get("schema_fields")
                 collection_name = collection.get("name")
                 collection_id = collection.get("id")
@@ -274,27 +275,30 @@ class HyperbaseCoordinator:
         # mutate Task in the runtime task info list
         # idk if it is best practice or not, duhh..
         # if it is working, I ain't touching that anymore
-        device_info.listened_entities = listened_entities
-        device_info.poll_time_s = poll_time_s
+        connector._listened_entities = listened_entities
+        connector._poll_time_s = poll_time_s
         
-        # use returned device_info to cancel and reload runtime task
+        # use returned conenector to cancel and reload runtime task
         # if needed.
-        return device_info
+        return connector
     
     
-    async def async_reload_task(self, key:str, device: ListenedDeviceInfo):
-        self._cancel_runtime_task(key)
+    async def async_reload_task(self, connector: HyperbaseConnectorEntry):
+        self._cancel_runtime_task(connector._connector_entity_id)
         await asyncio.sleep(1) # wait for task cancelation
-        self.task_manager.async_load_runtime_tasks([device])
+        await self.task_manager.async_load_runtime_tasks([connector])
     
     
     def _cancel_runtime_task(self, key: str):
         """Cancel task and clear info from runtime dictionary"""
         tasks = self.task_manager.runtime_tasks
         task_info = self.task_manager.runtime_task_info
-        cancel = tasks[key]
-        cancel()
-        del task_info[key]
+        
+        # self.task_manager.cancel_waiting_tasks(key)
+        cancel = tasks.get(key)
+        cancel() # terminate all tasks
+        if task_info.get(key) is not None:
+            del task_info[key]
 
     async def __async_verify_device_models(self):
         """
@@ -362,7 +366,7 @@ class HyperbaseCoordinator:
             LOGGER.error(f"({self.__project_name}) MQTT connection failed: {exc}")
 
 
-    async def disconnect(self):
+    async def disconnect(self, _=None):
         """Disonnects to MQTT Broker"""
         self.unloading = True
         await self.mqtt_client.async_disconnect()
@@ -688,8 +692,6 @@ class Task:
     
     
     async def async_publish_on_tick(self, *args):
-        if self._mqttc is None:
-            return
         er = async_get_entity_registry(self.hass)
         dr = async_get_device_registry(self.hass)
         device_entry = dr.async_get(self.connector._listened_device.id)
@@ -727,6 +729,10 @@ class Task:
             for changed_field in changed_fields:
                 self.__prev_data[changed_field] = None # reset value of changed field.
         
+        product_id = device_entry.id
+        if len(device_entry.dict_repr.get("identifiers")) > 0:
+            product_id = device_entry.dict_repr["identifiers"][0][1]
+        
         self.__prev_fields = _field_with_data.copy()
         self.__prev_data["record_date"] = datetime.datetime.now(tz=ZoneInfo("UTC")).isoformat()
         self.__prev_data["area_id"] = device_entry.area_id
@@ -734,7 +740,7 @@ class Task:
         self.__prev_data["connector_serial_number"] = self.__connector_serial_number
         self.__prev_data["name_by_user"] = device_entry.name_by_user
         self.__prev_data["name_default"] = device_entry.name
-        self.__prev_data["product_id"] = device_entry.dict_repr["identifiers"][0][1]
+        self.__prev_data["product_id"] = product_id
         
         self.hass.async_create_task(self.async_post_data(
             self.__prev_data,
@@ -742,11 +748,13 @@ class Task:
     
     
     async def async_publish_reload_status(self):
-        if self._mqttc is None:
-            return
         er = async_get_entity_registry(self.hass)
         dr = async_get_device_registry(self.hass)
         device_entry = dr.async_get(self.connector._listened_device.id)
+        
+        product_id = device_entry.id
+        if len(device_entry.dict_repr.get("identifiers")) > 0:
+            product_id = device_entry.dict_repr["identifiers"][0][1]
         
         sent_data = {
             "area_id": device_entry.area_id,
@@ -754,7 +762,7 @@ class Task:
             "connector_serial_number": self.__connector_serial_number,
             "name_by_user": device_entry.name_by_user,
             "name_default": device_entry.name,
-            "product_id": device_entry.dict_repr["identifiers"][0][1],
+            "product_id": product_id,
             "status": "reloaded",
             "record_date": datetime.datetime.now(tz=ZoneInfo("UTC")).isoformat()
         }
@@ -775,6 +783,8 @@ class Task:
     
     async def async_post_data(self, payload: dict):
         """Publish data to Hyperbase collection."""
+        if self._mqttc is None:
+            return
         self.hass.async_create_task(self._mqttc.async_publish(
             self.__mqtt_topic,
             json.json_dumps({
@@ -859,6 +869,10 @@ class HyperbaseTaskManager:
             return None
         return self.__runtime_task_info.get(connector_entity).device_info
 
+    def get_active_connector_by_id(self, connector_entity: str) -> HyperbaseConnectorEntry | None:
+        if self.__runtime_task_info.get(connector_entity) is None:
+            return None
+        return self.__runtime_task_info.get(connector_entity).connector
 
     @property
     def runtime_tasks(self):

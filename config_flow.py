@@ -8,12 +8,11 @@ from .util import get_model_identity, is_valid_connector_entity, format_device_n
 
 from .exceptions import ConnectorEntityExists, HyperbaseHTTPError, HyperbaseMQTTConnectionError, HyperbaseRESTConnectivityError, InvalidConnectorEntity
 
-from .common import HyperbaseConnectorEntry, ListenedDeviceEntry, async_get_hyperbase_registry
+from .common import HyperbaseConnectorEntry, async_get_hyperbase_registry
 from homeassistant.helpers import selector
 from homeassistant.helpers.device_registry import async_get as async_get_device_registry
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry, async_entries_for_device
 from paho.mqtt import client as mqtt
-from .models import DomainDeviceClass, create_schema
 
 from homeassistant import config_entries
 from homeassistant.core import callback
@@ -288,49 +287,49 @@ class HyperbaseConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             description_placeholders=placeholders
         )
     
-    async def async_step_reconfigure(self, user_input: Optional[Dict[str, Any]] = None):
-        """Step to reconfigure MQTT connection to Hyperbase"""
-        errors = {}
+    # async def async_step_reconfigure(self, user_input: Optional[Dict[str, Any]] = None):
+    #     """Step to reconfigure MQTT connection to Hyperbase"""
+    #     errors = {}
         
-        # retrieve previous entry
-        entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
-        new_entry = entry
-        if new_entry is None:
-            LOGGER.error("No previous entry found for reconfiguration")
-            return self.async_abort(reason="no_previous_entry")
+    #     # retrieve previous entry
+    #     entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+    #     new_entry = entry
+    #     if new_entry is None:
+    #         LOGGER.error("No previous entry found for reconfiguration")
+    #         return self.async_abort(reason="no_previous_entry")
         
-        if user_input is not None:
+    #     if user_input is not None:
             
-            await self.async_set_unique_id(new_entry.data[CONF_PROJECT_ID])
-            self._abort_if_unique_id_mismatch()
-            return self.async_update_reload_and_abort(
-                title=new_entry.data[CONF_PROJECT_NAME],
-                entry=new_entry,
-                data_updates={
-                    CONF_MQTT_ADDRESS: user_input[CONF_MQTT_ADDRESS],
-                    CONF_MQTT_PORT: user_input[CONF_MQTT_PORT],
-                    CONF_MQTT_TOPIC: user_input[CONF_MQTT_TOPIC],
-                    },
-            )
-        else:
-            user_input = {}
+    #         await self.async_set_unique_id(new_entry.data[CONF_PROJECT_ID])
+    #         self._abort_if_unique_id_mismatch()
+    #         return self.async_update_reload_and_abort(
+    #             title=new_entry.data[CONF_PROJECT_NAME],
+    #             entry=new_entry,
+    #             data_updates={
+    #                 CONF_MQTT_ADDRESS: user_input[CONF_MQTT_ADDRESS],
+    #                 CONF_MQTT_PORT: user_input[CONF_MQTT_PORT],
+    #                 CONF_MQTT_TOPIC: user_input[CONF_MQTT_TOPIC],
+    #                 },
+    #         )
+    #     else:
+    #         user_input = {}
         
-        return self.async_show_form(
-            step_id="reconfigure", 
-            data_schema=vol.Schema(
-                {
-                    vol.Required(CONF_MQTT_ADDRESS, default=new_entry.data[CONF_MQTT_ADDRESS]): str,
-                    vol.Required(CONF_MQTT_PORT, default=new_entry.data[CONF_MQTT_PORT]): cv.port,
-                    vol.Required(CONF_MQTT_TOPIC, default=new_entry.data[CONF_MQTT_TOPIC]): str,
-                }
-            ),
-            errors=errors
-        )
+    #     return self.async_show_form(
+    #         step_id="reconfigure", 
+    #         data_schema=vol.Schema(
+    #             {
+    #                 vol.Required(CONF_MQTT_ADDRESS, default=new_entry.data[CONF_MQTT_ADDRESS]): str,
+    #                 vol.Required(CONF_MQTT_PORT, default=new_entry.data[CONF_MQTT_PORT]): cv.port,
+    #                 vol.Required(CONF_MQTT_TOPIC, default=new_entry.data[CONF_MQTT_TOPIC]): str,
+    #             }
+    #         ),
+    #         errors=errors
+    #     )
 
 
 CONF_ADD_DEVICE = "add_device"
 CONF_MANAGE_DEVICE = "manage_device"
-CONF_REMOVE_DEVICE = "config_device"
+CONF_REMOVE_DEVICE = "delete_device"
 
 CONF_ACTIONS = {
     CONF_ADD_DEVICE: "Register New Device",
@@ -349,11 +348,12 @@ class ListenedEntityDomain:
 class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
     __current_device = ""
     __current_connector_entity = ""
+    __action = ""
     
     async def async_step_init(self, user_input: Optional[Dict[str, str]]=None):
         if user_input is not None:
-            action = user_input.get(CONF_ACTION)
-            if action == CONF_MANAGE_DEVICE or action == CONF_REMOVE_DEVICE:
+            self.__action = user_input.get(CONF_ACTION)
+            if self.__action == CONF_MANAGE_DEVICE or self.__action == CONF_REMOVE_DEVICE:
                 return await self.async_step_select_connector()
             return await self.async_step_select_device()
         return self.async_show_form(
@@ -393,6 +393,8 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
         
         if user_input is not None:
             self.__current_connector_entity = user_input.get(CONF_ENTITY_ID)
+            if self.__action == CONF_REMOVE_DEVICE:
+                return await self.async_step_remove_device()
             return await self.async_step_manage_connector()
         else:
             user_input = {}
@@ -411,15 +413,23 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
     async def async_step_manage_connector(self, user_input: Optional[Dict[str, Any]]=None):
         er = async_get_entity_registry(self.hass)
         
-        entry = er.async_get(self.__current_connector_entity)
+        hyp = await async_get_hyperbase_registry(self.hass)
+        connector = hyp.get_connector_entry(self.__current_connector_entity)
+        
         
         listened_entity_domains: dict[str, list[str]] = {}
-        listened_entities: list = entry.capabilities.get("listened_entities")
-        prev_poll_time_s: int = entry.capabilities.get("poll_time_s")
+        listened_entities: list = connector._listened_entities
+        prev_poll_time_s: int = connector._poll_time_s
         
-        entity_entries = async_entries_for_device(er, entry.capabilities.get("listened_device"))
+        entity_entries = async_entries_for_device(er, connector._listened_device.id)
+        
         for default_entity in entity_entries:
             if default_entity.original_device_class is None:
+                if default_entity.translation_key is not None:
+                    _available_entities = listened_entity_domains.get(f"{default_entity.domain}.{default_entity.translation_key}", [])
+                    _available_entities.append(default_entity.entity_id)
+                    listened_entity_domains[f"{default_entity.domain}.{default_entity.translation_key}"] = _available_entities
+                    continue
                 _available_entities = listened_entity_domains.get(default_entity.domain, [])
                 _available_entities.append(default_entity.entity_id)
                 listened_entity_domains[default_entity.domain] = _available_entities
@@ -450,7 +460,7 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
             })
         
         schema = schema.extend({
-            vol.Required("poll_time_s", default=entry.capabilities.get("poll_time_s", 5)): int,
+            vol.Required("poll_time_s", default=connector._poll_time_s): int,
         })
         
         errors={}
@@ -462,27 +472,38 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
                 if input_key == "poll_time_s":
                     continue
                 listened_entities.append(user_input.get(input_key))
-            entry.capabilities["poll_time_s"] = user_input["poll_time_s"]
-            entry.capabilities["listened_entities"] = listened_entities
             prev_state = self.hass.states.get(self.__current_connector_entity)
+            _updated = {
+                "listened_entities": listened_entities,
+                "poll_time_s": user_input["poll_time_s"]
+            }
+            
+            new_state_attr = {**prev_state.attributes, **_updated}
+
+            
             
             # set updated configuration into corresponding entity attributes.
             # awaits the execution to make sure the attributes is updated before
             # continue the operation.
             await self.hass.async_add_executor_job(self.hass.states.set,
-                self.__current_connector_entity, prev_state.state, entry.capabilities, True)
+                connector._connector_entity_id, prev_state.state, new_state_attr, True)
             
             
             # update runtime information for new entities configuration without
             # the need to revalidate or re-read from file
-            await self.config_entry.runtime_data.async_update_listened_entities(
+            device_info = await self.config_entry.runtime_data.async_update_listened_entities(
                 self.__current_connector_entity,
                 listened_entities,
                 user_input.get("poll_time_s")
             )
             
             if prev_poll_time_s != user_input.get("poll_time_s"):
-                pass
+                # if poll time is changed, we need to reload the runtime task
+                await self.config_entry.runtime_data.async_reload_task(device_info)
+            
+            await hyp.async_update_connector_entries(
+                connector._connector_entity_id, listened_entities, user_input.get("poll_time_s")
+            )
             
             self.__current_connector_entity = ""
             return self.async_create_entry(
@@ -554,11 +575,6 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
                     if input_key == "poll_time_s" or input_key == "add_next" or input_key == "connector_entity":
                         continue
                     listened_entities.append(user_input.get(input_key))
-                new_device = ListenedDeviceEntry(
-                    registering_device,
-                    listened_entities,
-                    user_input.get("poll_time_s"),
-                )
                 _entity = er.async_get_entity_id("notify", "hyperbase", f"{user_input.get("connector_entity")}_last_sent")
                 if _entity is not None:
                     raise ConnectorEntityExists
@@ -608,21 +624,18 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
     
     async def async_step_remove_device(self, user_input: Optional[Dict[str, Any]]=None):
         er = async_get_entity_registry(self.hass)
-        entries = er.entities.get_entries_for_config_entry_id(self.config_entry.entry_id)
-        entity_id = ""
+        
+        hyp = await async_get_hyperbase_registry(self.hass)
         
         errors = {}
         
-        for e in entries:
-            if e.capabilities["listened_device"] == self.__current_device:
-                entity_id = e.entity_id
-                break
-        
         if user_input is not None:
-            if user_input[CONF_REMOVE_DEVICE_CONFIRM] != entity_id:
+            if user_input.get(CONF_REMOVE_DEVICE_CONFIRM) != self.__current_connector_entity:
                 errors["base"] = "invalid_id"
             else:
-                er.async_remove(entity_id)
+                er.async_remove(self.__current_connector_entity)
+                await hyp.async_delete_connector_entry(self.__current_connector_entity)
+                self.config_entry.runtime_data._cancel_runtime_task(self.__current_connector_entity)
                 
                 return self.async_create_entry(
                     title="remove_device_config",
@@ -634,7 +647,7 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="remove_device",
             data_schema=vol.Schema({
-                vol.Required(CONF_REMOVE_DEVICE_CONFIRM, default=user_input.get(CONF_REMOVE_DEVICE_CONFIRM, entity_id)): str
+                vol.Required(CONF_REMOVE_DEVICE_CONFIRM): str
             }),
             errors=errors
         )

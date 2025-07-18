@@ -44,6 +44,9 @@ class SensorEntityData:
             if self.__device_class == SensorDeviceClass.TIMESTAMP or self.__device_class == SensorDeviceClass.DATE or self.__device_class == SensorDeviceClass.ENUM:
                 return {f"sensor__{self.__device_class}": self.__state_value}
             else:
-                return {f"sensor__{self.__device_class}": float(self.__state_value)}
+                try:
+                    return {f"sensor__{self.__device_class}": float(self.__state_value)}
+                except ValueError:
+                    pass
         else:
             return {f"sensor": self.__state_value}
