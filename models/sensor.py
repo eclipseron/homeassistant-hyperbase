@@ -2,7 +2,7 @@ import datetime
 from typing import Any
 
 from homeassistant.components.sensor.const import SensorDeviceClass
-from .base import BASE_COLUMNS, BaseModel
+from .base import BASE_COLUMNS
 
 SENSOR_COLUMNS = {
     **BASE_COLUMNS,
@@ -43,49 +43,3 @@ class SensorEntityData:
                 return {f"sensor__{self.__device_class}": float(self.__state_value)}
         else:
             return {f"sensor__unknown": self.__state_value}
-
-
-
-class SensorModel:
-    def __init__(self,
-        base_info: BaseModel,
-        device_class: str | None = None,
-        last_reset: str | None = None,
-        unit_of_measurement: str | None = None,
-        value: Any | None = None,
-        state_class: str | None = None,
-        ):
-        value_datetime = None
-        value_numeric = None
-        value_str = None
-        
-        
-        # try to parse numeric state from str to datetime or float
-        try:
-            _ = datetime.datetime.fromisoformat(value)
-            value_datetime = value
-        except:
-            try:
-                value_numeric = float(value)
-            except:
-                value_str = value
-        
-        try:
-            state_class = state_class.name
-        except AttributeError:
-            pass
-            # json_data["state_class"] = state.attributes["state_class"]
-        self.__data = {
-            **base_info.base_data,
-            "device_class": device_class,
-            "last_reset": last_reset,
-            "unit_of_measurement": unit_of_measurement,
-            "value_str": value_str,
-            "value_numeric": value_numeric,
-            "value_datetime": value_datetime,
-            "state_class": state_class,
-        }
-    
-    @property
-    def data(self):
-        return self.__data
