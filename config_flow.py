@@ -4,11 +4,11 @@ from uuid import uuid4
 import httpx
 from paho.mqtt.enums import CallbackAPIVersion, MQTTProtocolVersion
 
-from .util import is_valid_connector_entity, format_device_name
+from .util import get_model_identity, is_valid_connector_entity, format_device_name
 
 from .exceptions import ConnectorEntityExists, HyperbaseHTTPError, HyperbaseMQTTConnectionError, HyperbaseRESTConnectivityError, InvalidConnectorEntity
 
-from .common import ListenedDeviceEntry
+from .common import HyperbaseConnectorEntry, ListenedDeviceEntry, async_get_hyperbase_registry
 from homeassistant.helpers import selector
 from homeassistant.helpers.device_registry import async_get as async_get_device_registry
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry, async_entries_for_device
@@ -366,12 +366,6 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
         )
     
     async def async_step_select_device(self, user_input: Optional[Dict[str, Any]]=None):
-        er = async_get_entity_registry(self.hass)
-        entries = er.entities.get_entries_for_config_entry_id(self.config_entry.entry_id)
-        configured_devices = []
-        for e in entries:
-            configured_devices.append(e.capabilities.get("listened_device"))
-        
         errors = {}
         
         if user_input is not None:
@@ -393,6 +387,9 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
         er = async_get_entity_registry(self.hass)
         entries = er.entities.get_entries_for_config_entry_id(self.config_entry.entry_id)
         entities = [entry.entity_id for entry in entries]
+        default = None
+        if len(entities) > 0:
+            default = entities[0]
         
         if user_input is not None:
             self.__current_connector_entity = user_input.get(CONF_ENTITY_ID)
@@ -403,7 +400,7 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
         return self.async_show_form(
             step_id="select_connector",
             data_schema=vol.Schema({
-                vol.Required(CONF_ENTITY_ID, default=user_input.get(CONF_ENTITY_ID, entities[0])): selector.EntitySelector(
+                vol.Required(CONF_ENTITY_ID, default=user_input.get(CONF_ENTITY_ID, default)): selector.EntitySelector(
                     config=selector.EntitySelectorConfig(
                         include_entities=entities
                         )),
@@ -516,6 +513,11 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
         entity_entries = async_entries_for_device(er, self.__current_device)
         for entry in entity_entries:
             if entry.original_device_class is None:
+                if entry.translation_key is not None:
+                    _available_entities = listened_entity_domains.get(f"{entry.domain}.{entry.translation_key}", [])
+                    _available_entities.append(entry.entity_id)
+                    listened_entity_domains[f"{entry.domain}.{entry.translation_key}"] = _available_entities
+                    continue
                 _available_entities = listened_entity_domains.get(entry.domain, [])
                 _available_entities.append(entry.entity_id)
                 listened_entity_domains[entry.domain] = _available_entities
@@ -568,11 +570,22 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
                         unique_id=f"{user_input.get("connector_entity")}_last_sent",
                         has_entity_name=True,
                         config_entry=self.config_entry,
-                        original_name=new_device.original_name,
-                        capabilities=new_device.capabilities_dict
+                        original_name=get_model_identity(registering_device),
                     )
                 
-                await self.config_entry.runtime_data.async_add_new_listened_device(new_device.capabilities, entry.entity_id)
+                connector = HyperbaseConnectorEntry(
+                    connector_entity_id=entry.entity_id,
+                    project_id=self.config_entry.data.get(CONF_PROJECT_ID),
+                    listened_device=registering_device,
+                    listened_entities=listened_entities,
+                    poll_time_s=user_input.get("poll_time_s"),
+                )
+                
+                hyperbase = await async_get_hyperbase_registry(self.hass)
+                await hyperbase.async_store_connector_entry(connector)
+                
+                await self.config_entry.runtime_data.async_add_new_listened_device(connector)
+                
                 if user_input["add_next"]:
                     return await self.async_step_select_device()
                 

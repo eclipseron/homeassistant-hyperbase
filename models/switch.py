@@ -14,7 +14,11 @@ class SwitchColumns:
     def __init__(self, device_classes):
         self.__columns = {}
         for dc in device_classes:
+            if dc == "unknown":
+                self.__columns[f"switch"] = {"kind": "boolean", "required": False}
+                continue
             self.__columns[f"switch__{dc}"] = {"kind": "boolean", "required": False}
+
     @property
     def schema(self):
         return self.__columns
@@ -31,4 +35,4 @@ class SwitchEntityData:
         if self.__device_class is not None:
             return {f"switch__{self.__device_class}": self.__state_value == "on"}
         else:
-            return {f"switch__unknown": self.__state_value == "on"}
+            return {f"switch": self.__state_value == "on"}
