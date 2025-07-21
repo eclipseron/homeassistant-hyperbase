@@ -1,6 +1,5 @@
 import datetime
 from typing import Any, Dict, Optional
-from uuid import uuid4
 import httpx
 from paho.mqtt.enums import CallbackAPIVersion, MQTTProtocolVersion
 
@@ -30,8 +29,8 @@ from homeassistant.const import (
 from .const import (
     CONF_AUTH_TOKEN,
     CONF_MQTT_TOPIC,
-    CONF_SERIAL_NUMBER,
-    CONF_TOKEN_ID,
+    CONF_USER_COLLECTION_ID,
+    CONF_USER_ID,
     LOGGER,
     DOMAIN,
     CONF_BASE_URL,
@@ -74,12 +73,26 @@ def get_hyperbase_project(project_id:str, auth_token:str, base_url: str="http://
         raise HyperbaseHTTPError(exc.response.json()['error']['status'], status_code=exc.response.status_code)
 
 
-def validate_api_token(project_id: str, token_id: str, auth_token:str, base_url: str="http://localhost:8080"):
+def validate_user_account(project_id: str, user_id: str, auth_token:str, base_url: str="http://localhost:8080"):
     try:
-        client = httpx.Client()
-        client.headers.update({"Authorization": f"Bearer {auth_token}"})
-        r = client.get(f"{base_url}/api/rest/project/{project_id}/token/{token_id}")
-        r.raise_for_status()
+        headers = {
+            "Authorization": f"Bearer {auth_token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        with httpx.Client(verify=False, headers=headers) as client:
+            r = client.get(f"{base_url}/api/rest/project/{project_id}/collections")
+            r.raise_for_status()
+            collections: list[dict] = r.json().get("data", [{}])
+            
+            collection_id = ""
+            for collection in collections:
+                if collection.get("name") == "Users":
+                    collection_id = collection.get("id")
+
+            r = client.get(f"{base_url}/api/rest/project/{project_id}/collection/{collection_id}/record/{user_id}")
+            r.raise_for_status()
+            return {"collection_id": collection_id, "user_id": user_id}
     except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
         LOGGER.error(exc)
         raise HyperbaseRESTConnectivityError(exc.args)
@@ -87,6 +100,35 @@ def validate_api_token(project_id: str, token_id: str, auth_token:str, base_url:
         LOGGER.error(exc.response.json()['error']['message'])
         raise HyperbaseHTTPError(exc.response.json()['error']['status'], status_code=exc.response.status_code)
 
+
+def create_api_token(project_id: str, auth_token: str, base_url):
+    try:
+        headers = {
+            "Authorization": f"Bearer {auth_token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        
+        req = {
+            "name": "HA Access Token",
+            "allow_anonymous": False,
+        }
+        with httpx.Client(verify=False, headers=headers) as client:
+            r = client.post(
+                f"{base_url}/api/rest/project/{project_id}/token",
+                json=req
+            )
+            r.raise_for_status()
+            token: dict = r.json().get("data", {})
+            token_id = token.get("id")
+            
+            return token_id
+    except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
+        LOGGER.error(exc)
+        raise HyperbaseRESTConnectivityError(exc.args)
+    except httpx.HTTPStatusError as exc:
+        LOGGER.error(exc.response.json()['error']['message'])
+        raise HyperbaseHTTPError(exc.response.json()['error']['status'], status_code=exc.response.status_code)
 
 def ping_rest_server(base_url: str):
     try:
@@ -220,15 +262,16 @@ class HyperbaseConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 
                 is_project_exists = True
                 
-                await self.hass.async_add_executor_job(validate_api_token,
+                user_collection = await self.hass.async_add_executor_job(validate_user_account,
                     self.__project_config.get(CONF_PROJECT_ID),
-                    user_input.get(CONF_TOKEN_ID),
+                    user_input.get(CONF_USER_ID),
                     self.__auth_token,
                     self.__network_config.get(CONF_BASE_URL))
                 
-                serial_number = user_input.get(CONF_SERIAL_NUMBER, "")
-                if serial_number == "":
-                    serial_number = str(uuid4())
+                token_id = await self.hass.async_add_executor_job(create_api_token,
+                    self.__project_config.get(CONF_PROJECT_ID),
+                    self.__auth_token,
+                    self.__network_config.get(CONF_BASE_URL))
                 
                 return self.async_create_entry(
                     title=self.__project_config.get(CONF_PROJECT_NAME),
@@ -240,8 +283,9 @@ class HyperbaseConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_AUTH_TOKEN: self.__auth_token,
                         CONF_PROJECT_ID: self.__project_config.get(CONF_PROJECT_ID),
                         CONF_PROJECT_NAME: self.__project_config.get(CONF_PROJECT_NAME),
-                        CONF_API_TOKEN: user_input.get(CONF_TOKEN_ID),
-                        CONF_SERIAL_NUMBER: serial_number,
+                        CONF_API_TOKEN: token_id,
+                        CONF_USER_ID: user_collection.get("user_id"),
+                        CONF_USER_COLLECTION_ID: user_collection.get("collection_id")
                     },
                 )
             except HyperbaseRESTConnectivityError as exc:
@@ -279,8 +323,7 @@ class HyperbaseConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     vol.Required(CONF_EMAIL, description="Hyperbase Account Email", default=user_input.get(CONF_EMAIL, "")): str,
                     vol.Required(CONF_PASSWORD, description="Hyperbase Account Password", default=user_input.get(CONF_PASSWORD, "")): str,
                     vol.Required(CONF_PROJECT_ID, description="Hyperbase Project ID", default=user_input.get(CONF_PROJECT_ID, "")): str,
-                    vol.Required(CONF_TOKEN_ID, default=user_input.get(CONF_TOKEN_ID, "")): str,
-                    vol.Optional(CONF_SERIAL_NUMBER, default=user_input.get(CONF_SERIAL_NUMBER, "")): str,
+                    vol.Required(CONF_USER_ID, default=user_input.get(CONF_USER_ID, "")): str,
                 }
             ),
             errors=errors,

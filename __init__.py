@@ -15,12 +15,9 @@ from config.custom_components.hyperbase.registry import remove_registry
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.typing import ConfigType
-# from homeassistant.helpers.
-from uuid import uuid4
-from .const import CONF_MQTT_ADDRESS, CONF_MQTT_PORT, CONF_MQTT_TOPIC, CONF_PROJECT_ID, CONF_PROJECT_NAME, CONF_SERIAL_NUMBER, DOMAIN, HYPERBASE_CONFIG, LOGGER
+from .const import CONF_MQTT_ADDRESS, CONF_MQTT_PORT, CONF_MQTT_TOPIC, CONF_PROJECT_ID, CONF_PROJECT_NAME, CONF_SERIAL_NUMBER, CONF_USER_COLLECTION_ID, CONF_USER_ID, DOMAIN, HYPERBASE_CONFIG, LOGGER
 from .common import HyperbaseCoordinator
 from homeassistant.helpers.device_registry import async_get as async_get_device_registry
-from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 
 
 HyperbaseConfigEntry = ConfigEntry["HyperbaseCoordinator"]
@@ -37,7 +34,6 @@ async def async_setup_entry(
         identifiers={("hyperbase", entry.data[CONF_PROJECT_ID])},
         name=entry.data[CONF_PROJECT_NAME],
         model="Hyperbase Home Assistant Connector",
-        serial_number=entry.data[CONF_SERIAL_NUMBER]
     )
     
     mqtt_address = entry.data[CONF_MQTT_ADDRESS]
@@ -45,6 +41,8 @@ async def async_setup_entry(
     mqtt_topic = entry.data[CONF_MQTT_TOPIC]
     project_name = entry.data[CONF_PROJECT_NAME]
     project_id = entry.data[CONF_PROJECT_ID]
+    user_id = entry.data[CONF_USER_ID]
+    user_collection_id = entry.data[CONF_USER_COLLECTION_ID]
     
     entry.runtime_data = HyperbaseCoordinator(
         hass,
@@ -54,7 +52,8 @@ async def async_setup_entry(
         mqtt_topic,
         project_id,
         project_name,
-        hyperbase.serial_number,
+        user_id,
+        user_collection_id,
     )
     is_succeed = await entry.runtime_data.async_startup()
     
@@ -74,6 +73,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: HyperbaseConfigEntry) -
 async def async_remove_entry(hass: HomeAssistant, entry: HyperbaseConfigEntry):
     """Delete all registered connector by project id"""
     await remove_registry(hass, entry.unique_id)
+
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Initialize Hyperbase connection component."""

@@ -1,18 +1,15 @@
-import logging
+from paho.mqtt.enums import CallbackAPIVersion
 from homeassistant.core import HomeAssistant
 from paho.mqtt import client as mqtt
 import asyncio
 
-from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import dispatcher_send
 from .exceptions import HyperbaseMQTTConnectionError
-
+from .const import LOGGER
 
 MQTT_CONNECTED = "hyperbase_mqtt_connected"
 MQTT_DISCONNECTED = "hyperbase_mqtt_disconnected"
 
-_LOGGER = logging.getLogger(__name__)
 
 class MQTT:
     """Hyperbase MQTT client connection"""
@@ -34,11 +31,16 @@ class MQTT:
 
     def init_client(self):
         """Initialize paho client."""
-        proto = mqtt.MQTTv311
-        self._mqttc = mqtt.Client(protocol=proto)
+        proto = mqtt.MQTTv5
+        self._mqttc = mqtt.Client(
+            callback_api_version=CallbackAPIVersion.VERSION2,
+            protocol=proto,
+            client_id="hass"
+            )
 
         self._mqttc.on_connect = self._mqtt_on_connect
         self._mqttc.on_disconnect = self._mqtt_on_disconnect
+        self._mqttc.on_publish = self._mqtt_on_publish
 
     async def async_publish(
         self, topic: str=None, payload: mqtt.PayloadType=None, qos: int=None, retain: bool=None
@@ -74,24 +76,33 @@ class MQTT:
             self._mqttc.disconnect()
             self._mqttc.loop_stop()
 
-    def _mqtt_on_connect(self, _mqttc, _userdata, _flags, result_code: int) -> None:
+    def _mqtt_on_connect(self, client, userdata, connect_flags, reason_code, properties) -> None:
         """
         Connect Callback
         
         Function called when the client connected to the broker.
         """
-        if result_code != mqtt.CONNACK_ACCEPTED:
-            return result_code
+        LOGGER.info(f"mqtt connected | rc: {reason_code}")
+        if reason_code != mqtt.CONNACK_ACCEPTED:
+            return reason_code
         self.connected = True
-        dispatcher_send(self.hass, MQTT_CONNECTED)
+        # dispatcher_send(self.hass, MQTT_CONNECTED)
 
 
-    def _mqtt_on_disconnect(self, _mqttc, _userdata, result_code: int) -> None:
+    def _mqtt_on_disconnect(self, client, userdata, disconnect_flags, reason_code, properties) -> None:
         """
         Disconnect Callback
         
         Function called when the client disconnected from the broker.
         """
+        LOGGER.info(f"mqtt disconnected | rc: {reason_code}")
         self.connected = False
-        self._mqttc = None
-        dispatcher_send(self.hass, MQTT_DISCONNECTED)
+        # self._mqttc = None
+        # dispatcher_send(self.hass, MQTT_DISCONNECTED)
+
+
+    def _mqtt_on_publish(self, client, userdata, mid, reason_code, properties):
+        LOGGER.info(f"rc: {reason_code}")
+        # if reason_code == mqtt.MQTT_ERR_NO_CONN:
+            # LOGGER.warning("client disconnected")
+            # LOGGER.info(userdata)
