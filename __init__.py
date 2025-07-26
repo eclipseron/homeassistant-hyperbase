@@ -11,11 +11,12 @@ configuration.yaml file.
 hello_world:
 """
 
+from config.custom_components.hyperbase.recorder import SnapshotRecorder
 from config.custom_components.hyperbase.registry import remove_registry
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.typing import ConfigType
-from .const import CONF_MQTT_ADDRESS, CONF_MQTT_PORT, CONF_MQTT_TOPIC, CONF_PROJECT_ID, CONF_PROJECT_NAME, CONF_SERIAL_NUMBER, CONF_USER_COLLECTION_ID, CONF_USER_ID, DOMAIN, HYPERBASE_CONFIG, LOGGER
+from .const import CONF_BUCKET_ID, CONF_MQTT_ADDRESS, CONF_MQTT_PORT, CONF_MQTT_TOPIC, CONF_PROJECT_ID, CONF_PROJECT_NAME, CONF_SERIAL_NUMBER, CONF_USER_COLLECTION_ID, CONF_USER_ID, DOMAIN, HYPERBASE_CONFIG, LOGGER
 from .common import HyperbaseCoordinator
 from homeassistant.helpers.device_registry import async_get as async_get_device_registry
 
@@ -43,9 +44,14 @@ async def async_setup_entry(
     project_id = entry.data[CONF_PROJECT_ID]
     user_id = entry.data[CONF_USER_ID]
     user_collection_id = entry.data[CONF_USER_COLLECTION_ID]
+    bucket_id = entry.data[CONF_BUCKET_ID]
+    
+    snapshot = SnapshotRecorder(hass)
+    await snapshot.async_validate_table()
     
     entry.runtime_data = HyperbaseCoordinator(
         hass,
+        bucket_id,
         hyperbase.id,
         mqtt_address,
         mqtt_port,

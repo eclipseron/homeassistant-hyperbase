@@ -1,5 +1,9 @@
-import datetime
+import csv
+from dataclasses import dataclass
+from datetime import datetime
+from io import StringIO
 from typing import Any, Dict, Optional
+from zoneinfo import ZoneInfo
 import httpx
 from paho.mqtt.enums import CallbackAPIVersion, MQTTProtocolVersion
 
@@ -11,10 +15,11 @@ from .common import HyperbaseConnectorEntry, async_get_hyperbase_registry
 from homeassistant.helpers import selector
 from homeassistant.helpers.device_registry import async_get as async_get_device_registry
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry, async_entries_for_device
+from homeassistant.helpers.httpx_client import get_async_client
 from paho.mqtt import client as mqtt
 
 from homeassistant import config_entries
-from homeassistant.core import callback
+from homeassistant.core import HomeAssistant, callback
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from homeassistant.const import (
@@ -28,6 +33,7 @@ from homeassistant.const import (
 
 from .const import (
     CONF_AUTH_TOKEN,
+    CONF_BUCKET_ID,
     CONF_MQTT_TOPIC,
     CONF_USER_COLLECTION_ID,
     CONF_USER_ID,
@@ -43,6 +49,11 @@ from .const import (
     HYPERBASE_RESPONSE_MSG,
 )
 
+@dataclass
+class HyperbaseCollection:
+    id: str
+    name: str
+
 def login(email: str, password: str, base_url: str="http://localhost:8080"):
     try:
         client = httpx.Client()
@@ -57,6 +68,36 @@ def login(email: str, password: str, base_url: str="http://localhost:8080"):
         LOGGER.error(exc.response.json()['error']['message'])
         raise HyperbaseHTTPError(exc.response.json()['error']['status'], status_code=exc.response.status_code)
 
+
+async def async_get_hyperbase_collections(hass: HomeAssistant, project_id:str, auth_token:str, base_url: str):
+    try:
+        headers = {
+            "Authorization": f"Bearer {auth_token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        
+        client = get_async_client(hass, verify_ssl=False)
+        res = await client.get(
+            f"{base_url}/api/rest/project/{project_id}/collections",
+            headers=headers,
+        )
+        res.raise_for_status()
+        
+        collections = {}
+        data = res.json().get("data", [])
+        for collection in data:
+            if collection.get("name", "").startswith("hass."):
+                collection_name = collection.get("name")
+                collections[collection_name] = collection.get("id")
+        
+        return collections
+    except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
+        LOGGER.error(exc)
+        raise HyperbaseRESTConnectivityError(exc.args)
+    except httpx.HTTPStatusError as exc:
+        LOGGER.error(exc.response.json()['error']['message'])
+        raise HyperbaseHTTPError(exc.response.json()['error']['status'], status_code=exc.response.status_code)
 
 def get_hyperbase_project(project_id:str, auth_token:str, base_url: str="http://localhost:8080"):
     try:
@@ -101,7 +142,37 @@ def validate_user_account(project_id: str, user_id: str, auth_token:str, base_ur
         raise HyperbaseHTTPError(exc.response.json()['error']['status'], status_code=exc.response.status_code)
 
 
-def create_api_token(project_id: str, auth_token: str, base_url):
+async def async_create_bucket(hass: HomeAssistant, project_id: str, auth_token: str, base_url):
+    try:
+        headers = {
+            "Authorization": f"Bearer {auth_token}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+        req = {
+            "name": "HA Retries",
+        }
+        
+        client = get_async_client(hass, verify_ssl=False)
+        res = await client.post(
+            f"{base_url}/api/rest/project/{project_id}/bucket",
+            json=req,
+            headers=headers,
+        )
+        res.raise_for_status()
+        bucket: dict = res.json().get("data", {})
+        bucket_id = bucket.get("id")
+        
+        return bucket_id
+    except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
+        LOGGER.error(exc)
+        raise HyperbaseRESTConnectivityError(exc.args)
+    except httpx.HTTPStatusError as exc:
+        LOGGER.error(exc.response.json()['error']['message'])
+        raise HyperbaseHTTPError(exc.response.json()['error']['status'], status_code=exc.response.status_code)
+
+
+def create_api_token(project_id: str, auth_token: str, bucket_id: str,base_url):
     try:
         headers = {
             "Authorization": f"Bearer {auth_token}",
@@ -109,19 +180,31 @@ def create_api_token(project_id: str, auth_token: str, base_url):
             "Accept": "application/json",
         }
         
-        req = {
-            "name": "HA Access Token",
-            "allow_anonymous": False,
-        }
         with httpx.Client(verify=False, headers=headers) as client:
-            r = client.post(
+            res = client.post(
                 f"{base_url}/api/rest/project/{project_id}/token",
-                json=req
+                json={
+                    "name": "HA Access Token",
+                    "allow_anonymous": False,
+                }
             )
-            r.raise_for_status()
-            token: dict = r.json().get("data", {})
+            res.raise_for_status()
+            token: dict = res.json().get("data", {})
             token_id = token.get("id")
             
+            # add bucket rule to allow create new file into the bucket
+            res = client.post(
+                f"{base_url}/api/rest/project/{project_id}/token/{token_id}/bucket_rule",
+                json={
+                    "bucket_id": bucket_id,
+                    "find_one": "none",
+                    "find_many": "none",
+                    "insert_one": True,
+                    "update_one": "none",
+                    "delete_one": "none",
+                }
+            )
+            res.raise_for_status()
             return token_id
     except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
         LOGGER.error(exc)
@@ -268,9 +351,14 @@ class HyperbaseConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     self.__auth_token,
                     self.__network_config.get(CONF_BASE_URL))
                 
+                bucket_id = await async_create_bucket(
+                    self.hass, self.__project_config.get(CONF_PROJECT_ID),
+                    self.__auth_token, self.__network_config.get(CONF_BASE_URL))
+                
                 token_id = await self.hass.async_add_executor_job(create_api_token,
                     self.__project_config.get(CONF_PROJECT_ID),
                     self.__auth_token,
+                    bucket_id,
                     self.__network_config.get(CONF_BASE_URL))
                 
                 return self.async_create_entry(
@@ -285,7 +373,8 @@ class HyperbaseConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_PROJECT_NAME: self.__project_config.get(CONF_PROJECT_NAME),
                         CONF_API_TOKEN: token_id,
                         CONF_USER_ID: user_collection.get("user_id"),
-                        CONF_USER_COLLECTION_ID: user_collection.get("collection_id")
+                        CONF_USER_COLLECTION_ID: user_collection.get("collection_id"),
+                        CONF_BUCKET_ID: bucket_id,
                     },
                 )
             except HyperbaseRESTConnectivityError as exc:
@@ -329,55 +418,18 @@ class HyperbaseConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
             description_placeholders=placeholders
         )
-    
-    # async def async_step_reconfigure(self, user_input: Optional[Dict[str, Any]] = None):
-    #     """Step to reconfigure MQTT connection to Hyperbase"""
-    #     errors = {}
-        
-    #     # retrieve previous entry
-    #     entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
-    #     new_entry = entry
-    #     if new_entry is None:
-    #         LOGGER.error("No previous entry found for reconfiguration")
-    #         return self.async_abort(reason="no_previous_entry")
-        
-    #     if user_input is not None:
-            
-    #         await self.async_set_unique_id(new_entry.data[CONF_PROJECT_ID])
-    #         self._abort_if_unique_id_mismatch()
-    #         return self.async_update_reload_and_abort(
-    #             title=new_entry.data[CONF_PROJECT_NAME],
-    #             entry=new_entry,
-    #             data_updates={
-    #                 CONF_MQTT_ADDRESS: user_input[CONF_MQTT_ADDRESS],
-    #                 CONF_MQTT_PORT: user_input[CONF_MQTT_PORT],
-    #                 CONF_MQTT_TOPIC: user_input[CONF_MQTT_TOPIC],
-    #                 },
-    #         )
-    #     else:
-    #         user_input = {}
-        
-    #     return self.async_show_form(
-    #         step_id="reconfigure", 
-    #         data_schema=vol.Schema(
-    #             {
-    #                 vol.Required(CONF_MQTT_ADDRESS, default=new_entry.data[CONF_MQTT_ADDRESS]): str,
-    #                 vol.Required(CONF_MQTT_PORT, default=new_entry.data[CONF_MQTT_PORT]): cv.port,
-    #                 vol.Required(CONF_MQTT_TOPIC, default=new_entry.data[CONF_MQTT_TOPIC]): str,
-    #             }
-    #         ),
-    #         errors=errors
-    #     )
 
 
 CONF_ADD_DEVICE = "add_device"
 CONF_MANAGE_DEVICE = "manage_device"
 CONF_REMOVE_DEVICE = "delete_device"
+CONF_DOWNLOAD_DATA = "download_data"
 
 CONF_ACTIONS = {
     CONF_ADD_DEVICE: "Register New Device",
     CONF_MANAGE_DEVICE: "Manage Registered Devices",
     CONF_REMOVE_DEVICE: "Remove Registered Device",
+    CONF_DOWNLOAD_DATA: "Download CSV Data",
 }
 
 CONF_REMOVE_DEVICE_CONFIRM = "remove_device_confirm"
@@ -398,12 +450,61 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
             self.__action = user_input.get(CONF_ACTION)
             if self.__action == CONF_MANAGE_DEVICE or self.__action == CONF_REMOVE_DEVICE:
                 return await self.async_step_select_connector()
+            elif self.__action == CONF_DOWNLOAD_DATA:
+                return await self.async_step_download_csv()
+            
             return await self.async_step_select_device()
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
                     vol.Required(CONF_ACTION, default=CONF_MANAGE_DEVICE): vol.In(CONF_ACTIONS)
+                }
+            )
+        )
+    
+    
+    async def async_step_download_csv(self, user_input: dict | Any = None):
+        collections = await async_get_hyperbase_collections(
+            self.hass, self.config_entry.data.get(CONF_PROJECT_ID),
+            self.config_entry.data.get(CONF_AUTH_TOKEN), self.config_entry.data.get(CONF_BASE_URL))
+        
+        collection_options = [collection_name for collection_name in collections.keys()]
+        
+        if user_input is not None:
+            
+            oldest_dt = datetime.strptime(user_input.get("Oldest Data"), "%Y-%m-%d %H:%M:%S")
+            latest_dt = datetime.strptime(user_input.get("Latest Data"), "%Y-%m-%d %H:%M:%S")
+            
+            _collection_name = user_input.get("Collection Name")
+            collection_id = collections.get(_collection_name)
+            result = await self.config_entry.runtime_data.manager.async_fetch_csv_data(collection_id,
+                oldest_dt.astimezone(tz=ZoneInfo("UTC")).isoformat(), latest_dt.astimezone(tz=ZoneInfo("UTC")).isoformat())
+            if result.get("count") > 1:
+                data: list[dict] = result.get("data", [])
+                headers = data[0].keys()
+                out = StringIO()
+                
+                writer = csv.DictWriter(out, fieldnames=headers)
+                writer.writeheader()
+                for row in data:
+                    writer.writerow(row)
+            return self.async_create_entry(
+                data={}
+            )
+            
+        return  self.async_show_form(
+            step_id="download_csv",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("Oldest Data", default=datetime.now().strftime("%Y-%m-%d %H:%M:%S")): selector.DateTimeSelector(),
+                    vol.Required("Latest Data", default=datetime.now().strftime("%Y-%m-%d %H:%M:%S")): selector.DateTimeSelector(),
+                    vol.Required("Collection Name"): selector.SelectSelector(
+                        config=selector.SelectSelectorConfig(
+                            mode="dropdown",
+                            options=collection_options
+                        )
+                    ),
                 }
             )
         )
@@ -567,7 +668,7 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
         er = async_get_entity_registry(self.hass)
         
         registering_device = dr.async_get(self.__current_device)
-        connector_entity = f"{format_device_name(registering_device.name)}_{int(datetime.datetime.now().timestamp()*1000)}"
+        connector_entity = f"{format_device_name(registering_device.name)}_last_sent"
         
         schema = vol.Schema({
             vol.Required("connector_entity", default=connector_entity): str,
@@ -618,7 +719,7 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
                     if input_key == "poll_time_s" or input_key == "add_next" or input_key == "connector_entity":
                         continue
                     listened_entities.append(user_input.get(input_key))
-                _entity = er.async_get_entity_id("notify", "hyperbase", f"{user_input.get("connector_entity")}_last_sent")
+                _entity = er.async_get_entity_id("notify", "hyperbase", user_input.get("connector_entity"))
                 if _entity is not None:
                     raise ConnectorEntityExists
                 

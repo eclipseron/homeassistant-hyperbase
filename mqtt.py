@@ -102,7 +102,8 @@ class MQTT:
 
 
     def _mqtt_on_publish(self, client, userdata, mid, reason_code, properties):
-        LOGGER.info(f"rc: {reason_code}")
+        pass
+        # LOGGER.info(f"rc: {reason_code}")
         # if reason_code == mqtt.MQTT_ERR_NO_CONN:
             # LOGGER.warning("client disconnected")
             # LOGGER.info(userdata)

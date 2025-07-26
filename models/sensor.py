@@ -45,8 +45,10 @@ class SensorEntityData:
                 return {f"sensor__{self.__device_class}": self.__state_value}
             else:
                 try:
+                    if self.__state_value == "unknown":
+                        return {f"sensor__{self.__device_class}": None}
                     return {f"sensor__{self.__device_class}": float(self.__state_value)}
                 except ValueError:
-                    pass
+                    return {f"sensor__{self.__device_class}": self.__state_value}
         else:
             return {f"sensor": self.__state_value}

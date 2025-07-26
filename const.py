@@ -25,6 +25,7 @@ CONF_AUTH_TOKEN = "auth_token"
 CONF_USER_ID = "user_id"
 CONF_USER_COLLECTION_ID = "user_collection_id"
 CONF_SERIAL_NUMBER = "serial_number"
+CONF_BUCKET_ID = "bucket_id"
 
 HYPERBASE_RESPONSE_CODE = "code"
 HYPERBASE_RESPONSE_MSG = "msg"
