@@ -1,7 +1,6 @@
 
 import logging
 
-from homeassistant.loader import MQTT
 from homeassistant.util.hass_dict import HassKey
 
 

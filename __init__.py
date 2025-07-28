@@ -11,8 +11,9 @@ configuration.yaml file.
 hello_world:
 """
 
-from config.custom_components.hyperbase.recorder import SnapshotRecorder
-from config.custom_components.hyperbase.registry import remove_registry
+from .csv_download import CSVDownloadView
+from .recorder import SnapshotRecorder
+from .registry import remove_registry
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.typing import ConfigType
@@ -63,6 +64,7 @@ async def async_setup_entry(
     )
     is_succeed = await entry.runtime_data.async_startup()
     
+    hass.http.register_view(CSVDownloadView(hass))
     return is_succeed
 
 

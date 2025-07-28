@@ -27,7 +27,8 @@ class SnapshotRecorder:
             "timestamp" TEXT,
             connector_entity_id TEXT,
             payload TEXT,
-            collection_id TEXT)
+            collection_id TEXT,
+            project_id TEXT)
             """)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS failed(
@@ -35,19 +36,25 @@ class SnapshotRecorder:
             start_snapshot_time TEXT,
             end_snapshot_time TEXT)
             """)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS check_history(
+            "id" INTEGER PRIMARY KEY,
+            "timestamp" TEXT
+            )""")
     
     
-    def write_recorder(self, stored_data):
+    def write_recorder(self, stored_data, project_id):
         data = [(
             message.get("timestamp"),
             message.get("connector_entity_id"),
             message.get("collection_id"),
-            message.get("payload")) for message in stored_data]
+            message.get("payload"),
+            project_id) for message in stored_data]
         with sqlite3.connect(DEFAULT_SNAPSHOT_PATH) as db:
             cur = db.cursor()
             cur.executemany("""
-                INSERT INTO snapshot("timestamp", connector_entity_id, collection_id, payload)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO snapshot("timestamp", connector_entity_id, collection_id, payload, project_id)
+                VALUES (?, ?, ?, ?, ?)
                 """, data)
             db.commit()
     

@@ -1,7 +1,7 @@
 import csv
 from dataclasses import dataclass
 from datetime import datetime
-from io import StringIO
+from urllib.parse import quote
 from typing import Any, Dict, Optional
 from zoneinfo import ZoneInfo
 import httpx
@@ -473,25 +473,19 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
         
         if user_input is not None:
             
-            oldest_dt = datetime.strptime(user_input.get("Oldest Data"), "%Y-%m-%d %H:%M:%S")
-            latest_dt = datetime.strptime(user_input.get("Latest Data"), "%Y-%m-%d %H:%M:%S")
+            _oldest_dt = datetime.strptime(user_input.get("Oldest Data"), "%Y-%m-%d %H:%M:%S")
+            _latest_dt = datetime.strptime(user_input.get("Latest Data"), "%Y-%m-%d %H:%M:%S")
             
+            oldest_dt = _oldest_dt.astimezone(tz=ZoneInfo("UTC")).isoformat()
+            latest_dt = _latest_dt.astimezone(tz=ZoneInfo("UTC")).isoformat()
             _collection_name = user_input.get("Collection Name")
             collection_id = collections.get(_collection_name)
-            result = await self.config_entry.runtime_data.manager.async_fetch_csv_data(collection_id,
-                oldest_dt.astimezone(tz=ZoneInfo("UTC")).isoformat(), latest_dt.astimezone(tz=ZoneInfo("UTC")).isoformat())
-            if result.get("count") > 1:
-                data: list[dict] = result.get("data", [])
-                headers = data[0].keys()
-                out = StringIO()
-                
-                writer = csv.DictWriter(out, fieldnames=headers)
-                writer.writeheader()
-                for row in data:
-                    writer.writerow(row)
-            return self.async_create_entry(
-                data={}
-            )
+            url = f"/api/hyperbase/download_csv?start_time={oldest_dt}&end_time={latest_dt}&collection_id={collection_id}"
+            encoded_url = quote(url, safe="/?&=")
+            
+            HA_url = user_input.get("Home Assistant Base URL")
+            self.base_url = f"{HA_url}{encoded_url}"
+            return await self.async_step_confirm_url()
             
         return  self.async_show_form(
             step_id="download_csv",
@@ -505,10 +499,26 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
                             options=collection_options
                         )
                     ),
+                    vol.Required("Home Assistant Base URL", default="http://localhost:8123"): str,
                 }
             )
         )
     
+    
+    async def async_step_confirm_url(self, user_input: Any = None):
+        placeholders = {"csv_download_url": self.base_url}
+        if user_input is not None:
+            return self.async_create_entry(
+                data={}
+            )
+        else:
+            user_input = {}
+        
+        return self.async_show_form(
+            step_id="confirm_url",
+            data_schema=vol.Schema({}),
+            description_placeholders=placeholders
+        )
     async def async_step_select_device(self, user_input: Optional[Dict[str, Any]]=None):
         errors = {}
         
@@ -772,6 +782,8 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
         hyp = await async_get_hyperbase_registry(self.hass)
         
         errors = {}
+        placeholders = {}
+        placeholders["connector_entity_id"] = self.__current_connector_entity
         
         if user_input is not None:
             if user_input.get(CONF_REMOVE_DEVICE_CONFIRM) != self.__current_connector_entity:
@@ -780,7 +792,6 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
                 er.async_remove(self.__current_connector_entity)
                 await hyp.async_delete_connector_entry(self.__current_connector_entity)
                 self.config_entry.runtime_data._cancel_runtime_task(self.__current_connector_entity)
-                
                 return self.async_create_entry(
                     title="remove_device_config",
                     data={}
@@ -793,5 +804,6 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
             data_schema=vol.Schema({
                 vol.Required(CONF_REMOVE_DEVICE_CONFIRM): str
             }),
+            description_placeholders=placeholders,
             errors=errors
         )

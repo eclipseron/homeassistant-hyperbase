@@ -2,14 +2,22 @@
   "config": {
     "step": {
       "user": {
-        "title": "Setup REST API Connection",
-        "description": "Enter your Hyperbase REST API connection details.",
+        "title": "Setup Hyperbase Connection",
+        "description": "Hyperbase Base URL uses the address of Hyperbase backend server. Check the configured Hyperbase Server Base URL on Hyperbase UI. \n Please refer to Hyperbase configuration file for the MQTT connection information. For more information: https://hyperbase-book.hilmy.dev/04_features/12_change_server",
         "data": {
-          "rest_protocol": "REST Protocol",
-          "rest_address": "IP Address or Domain Name",
-          "rest_port": "Port",
-          "email": "Email",
-          "password": "Password"
+          "rest_address": "Hyperbase Base URL",
+          "mqtt_address": "MQTT Host IP",
+          "mqtt_port": "MQTT Port",
+          "mqtt_topic": "MQTT Hyperbase Topic"
+        }
+      },
+      "login": {
+        "title": "Setup Hyperbase User",
+        "data": {
+          "email": "Hyperbase Admin Email",
+          "password": "Hyperbase Admin Password",
+          "project_id": "Hyperbase Project ID",
+          "user_id": "Home Assistant User ID"
         }
       }
     },
@@ -18,10 +26,60 @@
       "login_error": "Login failed ({code}): {msg}",
       "network_error": "({network_type}) Failed to connect: {msg}",
       "project_error": "Failed to configure project ({code}): {msg}",
-      "token_error": "Failed to verify token ({code}): {msg}"
+      "token_error": "Failed to verify token ({code}): {msg}",
+      "invalid_entity": "Please use alphanumeric or - or _ and no whitespace for connector entity name",
+      "entity_exists": "This connection is exists. Use another name"
     },
     "abort": {
       "already_configured": "[%key:common::config_flow::abort::already_configured_device%]"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Hyperbase Configuration",
+        "data": {
+          "action": "Please choose a configuration option"
+        }
+      },
+      "select_device": {
+        "title": "Collect New Device Data",
+        "data": {
+          "device": "Available Devices"
+        }
+      },
+      "select_entities": {
+        "title": "Collect New Device Data",
+        "description": "Connector Entity ID is used to identify notify entity. This integration use the entity to hold data collecting information. You can leave it default unless you create new connector entity for the same configured device.",
+        "data": {
+          "connector_entity": "Connector Entity ID",
+          "poll_time_s": "Data Collecting Time Interval",
+          "add_next": "Add another device"
+        }
+      },
+      "select_connector": {
+        "title": "Select Configured Device",
+        "data": {
+          "entity_id": "Configured Device"
+        }
+      },
+      "manage_connector": {
+        "title": "Update Data Collecting Information",
+        "data": {
+          "poll_time_s": "Data Collecting Time Interval"
+        }
+      },
+      "remove_device": {
+        "title": "Remove Configured Device",
+        "description": "Removing configured device will stop data collection into Hyperbase. Please enter **{connector_entity_id}** to confirm",
+        "data": {
+          "remove_device_confirm": "Enter Connector Entity ID to confirm"
+        }
+      },
+      "confirm_url": {
+        "title": "CSV Download",
+        "description": "Copy this URL to download exported data:\n{csv_download_url}"
+      }
     }
   }
 }

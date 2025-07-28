@@ -752,7 +752,7 @@ class Task:
         self.hass = hass
         self.connector = connector
         self._mqttc = mqtt_client
-        self.__mqtt_topic = mqtt_topic
+        self._mqtt_topic = mqtt_topic
         self.__prev_data = None
         self.__prev_fields = set([])
         self.__project_id = project_id
@@ -760,8 +760,8 @@ class Task:
         self.__collection_name = collection_name
         self.__collection_id = collection_id
         self.__api_token_id = api_token_id
-        self.__user_id = user_id
-        self.__user_collection_id = user_collection_id
+        self._user_id = user_id
+        self._user_collection_id = user_collection_id
         
         self.snapshot_buffer = callbacks.get("snapshot_buffer")
     
@@ -860,8 +860,8 @@ class Task:
                 "collection_id": self.__collection_id,
                 "token_id": self.__api_token_id,
                 "user": {
-                    "collection_id": self.__user_collection_id,
-                    "id": self.__user_id,
+                    "collection_id": self._user_collection_id,
+                    "id": self._user_id,
                 },
                 "data": payload,
             })
@@ -877,7 +877,7 @@ class Task:
         
         """Publish data to Hyperbase collection."""
         await self._mqttc.async_publish(
-            self.__mqtt_topic,
+            self._mqtt_topic,
             json_data,
             qos=1,
             retain=False,
@@ -907,18 +907,18 @@ class HyperbaseTaskManager:
         ):
         
         self.hass = hass
-        self.__mqttc = mqttc
+        self.mqttc = mqttc
         self._data_collecting_tasks: dict[str, Any] = {}
         self._data_collecting_task_info: dict[str, Task] = {}
-        self.__project_manager = project_manager
-        self.__mqtt_topic = mqtt_topic
+        self.project_manager = project_manager
+        self._mqtt_topic = mqtt_topic
         
-        self.__user_id = user_id
-        self.__user_collection_id = user_collection_id
+        self._user_id = user_id
+        self._user_collection_id = user_collection_id
         
         self.recorder = SnapshotRecorder(self.hass)
         
-        self.__snapshot_buffer: list[dict] = []
+        self._snapshot_buffer: list[dict] = []
         self._shutdown_callback = []
     
     
@@ -945,16 +945,16 @@ class HyperbaseTaskManager:
     async def __start_logging(self, connector: HyperbaseConnectorEntry):
         task = Task(
                 hass=self.hass,
-                api_token_id=self.__project_manager.api_token_id,
-                collection_id=self.__project_manager.get_collection_id(connector._collection_name),
+                api_token_id=self.project_manager.api_token_id,
+                collection_id=self.project_manager.get_collection_id(connector._collection_name),
                 collection_name=connector._collection_name,
                 connector=connector,
-                mqtt_client=self.__mqttc,
-                mqtt_topic=self.__mqtt_topic,
-                project_id=self.__project_manager.project_id,
-                project_name=self.__project_manager.entry.data[CONF_PROJECT_NAME],
-                user_id = self.__user_id,
-                user_collection_id = self.__user_collection_id,
+                mqtt_client=self.mqttc,
+                mqtt_topic=self._mqtt_topic,
+                project_id=self.project_manager.project_id,
+                project_name=self.project_manager.entry.data[CONF_PROJECT_NAME],
+                user_id = self._user_id,
+                user_collection_id = self._user_collection_id,
                 callbacks={
                     "snapshot_buffer": self.append_snapshot_buffer,
                 }
@@ -972,30 +972,37 @@ class HyperbaseTaskManager:
 
 
     async def _async_write_snapshot(self, _=None):
-        if len(self.__snapshot_buffer) < 1:
+        if len(self._snapshot_buffer) < 1:
             return
-        snapshot_entries = self.__snapshot_buffer.copy()
-        self.__snapshot_buffer.clear()
-        await self.hass.async_add_executor_job(self.recorder.write_recorder, snapshot_entries)
+        snapshot_entries = self._snapshot_buffer.copy()
+        self._snapshot_buffer.clear()
+        await self.hass.async_add_executor_job(self.recorder.write_recorder, snapshot_entries, self.project_manager.project_id)
 
 
     async def _async_consistency_check(self, _last_entry_record_time: datetime):
         hyp = await async_get_hyperbase_registry(self.hass)
         connectors = hyp.get_connector_entries()
+        start_time = _last_entry_record_time - timedelta(minutes=4)
+        end_time = _last_entry_record_time - timedelta(minutes=1)
+        
+        _set, _mapping = await self.hass.async_add_executor_job(
+            self.recorder.query_snapshots,
+            start_time.isoformat(),
+            end_time.isoformat())
+        
+        # prevent calling API if there is no collected data within given time range
+        if len(_set) < 0:
+            return
         
         collection_ids = []
-        
         for connector in connectors:
-            collection_id = self.__project_manager.get_collection_id(connector._collection_name)
+            collection_id = self.project_manager.get_collection_id(connector._collection_name)
             collection_ids.append(collection_id)
         
         hyperbase_data_set = set([])
-        start_time = _last_entry_record_time - timedelta(minutes=6)
-        end_time = _last_entry_record_time - timedelta(minutes=3)
-        
         is_success = False
         for collection_id in collection_ids:
-            res = await self.__project_manager.async_fetch_records_consistency(
+            res = await self.project_manager.async_fetch_records_consistency(
                 collection_id,
                 start_time=start_time.isoformat(),
                 end_time=end_time.isoformat(),
@@ -1017,10 +1024,6 @@ class HyperbaseTaskManager:
                 end_time.isoformat())
             return is_success
         
-        _set, _mapping = await self.hass.async_add_executor_job(
-            self.recorder.query_snapshots,
-            start_time.isoformat(),
-            end_time.isoformat())
         
         _set = set(_set)
         _set.difference_update(hyperbase_data_set)
@@ -1045,7 +1048,7 @@ class HyperbaseTaskManager:
                 "data": payloads_json,
             }
             
-            await self.__project_manager.async_create_bucket_object(retry_data)
+            await self.project_manager.async_create_bucket_object(retry_data)
         
         return is_success
 
@@ -1077,8 +1080,8 @@ class HyperbaseTaskManager:
 
 
     async def _async_retry_failed(self, payload):
-        self.hass.async_create_task(self.__mqttc.async_publish(
-            self.__mqtt_topic,
+        self.hass.async_create_task(self.mqttc.async_publish(
+            self._mqtt_topic,
             payload,
             qos=1,
             retain=False,
@@ -1086,7 +1089,7 @@ class HyperbaseTaskManager:
 
 
     def append_snapshot_buffer(self, snapshot_entry: dict):
-        self.__snapshot_buffer.append(snapshot_entry)
+        self._snapshot_buffer.append(snapshot_entry)
 
 
     def get_active_connector_by_id(self, connector_entity: str) -> HyperbaseConnectorEntry | None:
