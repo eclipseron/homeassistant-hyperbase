@@ -1,9 +1,9 @@
 from typing import Any
 
-class ButtonColumns:
+class SatelliteColumns:
     def __init__(self):
         self.__columns = {
-            "button": {"kind": "string", "required": False},
+            "satellite": {"kind": "string", "required": False},
         }
 
     @property
@@ -11,12 +11,12 @@ class ButtonColumns:
         return self.__columns
 
 
-class ButtonEntityData:
+class SatelliteEntityData:
     def __init__(self, state_value: Any | None = None):
         self.__state_value = state_value
     
     @property
     def data(self):
         if self.__state_value == "unknown":
-            return {"button": None}
-        return {"button": self.__state_value}
+            return {"satellite": None}
+        return {"satellite": self.__state_value}

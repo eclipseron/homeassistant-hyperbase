@@ -1,9 +1,9 @@
 from typing import Any
 
-class ButtonColumns:
+class AlarmColumns:
     def __init__(self):
         self.__columns = {
-            "button": {"kind": "string", "required": False},
+            "alarm": {"kind": "string", "required": False},
         }
 
     @property
@@ -11,12 +11,12 @@ class ButtonColumns:
         return self.__columns
 
 
-class ButtonEntityData:
+class AlarmEntityData:
     def __init__(self, state_value: Any | None = None):
         self.__state_value = state_value
     
     @property
     def data(self):
         if self.__state_value == "unknown":
-            return {"button": None}
-        return {"button": self.__state_value}
+            return {"alarm": None}
+        return {"alarm": self.__state_value}

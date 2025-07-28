@@ -1,17 +1,6 @@
-import datetime
 from typing import Any
 
 from homeassistant.components.sensor.const import SensorDeviceClass
-from .base import BASE_COLUMNS
-
-SENSOR_COLUMNS = {
-    **BASE_COLUMNS,
-    "device_class": {"kind": "string", "required": False},
-    "value_str": {"kind": "string", "required": False},
-    "value_numeric": {"kind": "double", "required": False},
-    "value_datetime": {"kind": "timestamp", "required": False},
-    "state_class": {"kind": "string", "required": False}
-}
 
 class SensorColumns:
     def __init__(self, device_classes):

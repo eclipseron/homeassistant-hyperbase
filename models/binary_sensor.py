@@ -21,13 +21,15 @@ class BinarySensorColumns:
 
 
 class BinarySensorEntityData:
-    def __init__(self, device_class: str | None = None, state_value: Any | None = None):
+    def __init__(self,
+            device_class: str | None = None,
+            state_value: bool | None = None):
         self.__device_class = device_class
         self.__state_value = state_value
     
     @property
     def data(self):
         if self.__device_class is not None:
-            return {f"binary_sensor__{self.__device_class}": self.__state_value == "on"}
+            return {f"binary_sensor__{self.__device_class}": self.__state_value}
         else:
-            return {f"binary_sensor": self.__state_value == "on"}
+            return {f"binary_sensor": self.__state_value}

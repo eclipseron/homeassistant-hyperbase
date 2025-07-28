@@ -1,30 +1,3 @@
-from typing import Any
-from .base import BASE_COLUMNS
-
-
-LIGHT_COLUMNS = {
-    **BASE_COLUMNS,
-    "brightness": {"kind": "int", "required": False},
-    "color_mode": {"kind": "string", "required": False},
-    "color_temp_kelvin": {"kind": "int", "required": False},
-    "effect": {"kind": "string", "required": False},
-    "hue": {"kind": "double", "required": False},
-    "saturation": {"kind": "double", "required": False},
-    "is_on": {"kind": "boolean", "required": False},
-    "max_color_temp_kelvin": {"kind": "int", "required": False},
-    "min_color_temp_kelvin": {"kind": "int", "required": False},
-    "color_temp": {"kind": "int", "required": False},
-    "red": {"kind": "int", "required": False},
-    "green": {"kind": "int", "required": False},
-    "blue": {"kind": "int", "required": False},
-    # "white": {"kind": "int", "required": False},
-    # "cool_white": {"kind": "int", "required": False},
-    # "warm_white": {"kind": "int", "required": False},
-    "x_color": {"kind": "int", "required": False},
-    "y_color": {"kind": "int", "required": False},
-}
-
-
 class LightColumns:
     def __init__(self):
         self.__columns = {
@@ -48,7 +21,7 @@ class LightColumns:
 
 class LightEntityData:
     def __init__(self,
-        state_value: Any | None = None,
+        state_value: bool | None = None,
         brightness: int | None = None,
         color_temp_kelvin: int | None = None,
         hue: float | None = None,
@@ -79,8 +52,8 @@ class LightEntityData:
             "light_color_temp_kelvin": self.__color_temp_kelvin,
             "light_hue": self.__hue,
             "light_saturation": self.__saturation,
-            "light_is_on": self.__state_value == "on",
-            "light_color_temp": self.__color_temp, 
+            "light_is_on": self.__state_value,
+            "light_color_temp": self.__color_temp,
             "light_red": self.__red,
             "light_green": self.__green,
             "light_blue": self.__blue,

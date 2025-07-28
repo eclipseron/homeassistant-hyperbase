@@ -1,0 +1,18 @@
+class TextColumns:
+    def __init__(self):
+        self.__columns = {
+            "text_data": {"kind": "string", "required": False},
+        }
+
+    @property
+    def schema(self):
+        return self.__columns
+
+
+class TextEntityData:
+    def __init__(self, state_value: str | None = None):
+        self.__state_value = state_value
+    
+    @property
+    def data(self):
+        return {"text_data": self.__state_value}
