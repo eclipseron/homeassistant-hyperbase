@@ -1,12 +1,3 @@
-from typing import Any
-from .base import BASE_COLUMNS
-
-BINARY_SENSOR_COLUMNS = {
-    **BASE_COLUMNS,
-    "device_class": {"kind": "string", "required": False},
-    "is_on": {"kind": "boolean", "required": False},
-}
-
 class BinarySensorColumns:
     def __init__(self, device_classes):
         self.__columns = {}

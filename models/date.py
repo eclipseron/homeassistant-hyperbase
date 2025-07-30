@@ -1,7 +1,7 @@
 class DateColumns:
     def __init__(self):
         self.__columns = {
-            "date": {"kind": "timestamp", "required": False},
+            "date": {"kind": "string", "required": False},
         }
 
     @property

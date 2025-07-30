@@ -53,16 +53,16 @@ class ClimateEntityData:
     @property
     def data(self):
         return {
-            "climate_current_humidity": self._climate_current_humidity,
-            "climate_current_temperature": self._climate_current_temperature,
-            "climate_fan_mode": self._climate_fan_mode,
-            "climate_hvac_action": self._climate_hvac_action,
-            "climate_hvac_mode": self._climate_hvac_mode,
-            "climate_preset_mode": self._climate_preset_mode,
-            "climate_swing_mode": self._climate_swing_mode,
-            "climate_swing_horizontal_mode": self._climate_swing_horizontal_mode,
-            "climate_target_humidity": self._climate_target_humidity,
-            "climate_target_temperature": self._climate_target_temperature,
-            "climate_target_temperature_high": self._climate_target_temperature_high,
-            "climate_target_temperature_low": self._climate_target_temperature_low,
+            "climate_current_humidity": self._current_humidity,
+            "climate_current_temperature": self._current_temperature,
+            "climate_fan_mode": self._fan_mode,
+            "climate_hvac_action": self._hvac_action,
+            "climate_hvac_mode": self._hvac_mode,
+            "climate_preset_mode": self._preset_mode,
+            "climate_swing_mode": self._swing_mode,
+            "climate_swing_horizontal_mode": self._swing_horizontal_mode,
+            "climate_target_humidity": self._target_humidity,
+            "climate_target_temperature": self._target_temperature,
+            "climate_target_temperature_high": self._target_temperature_high,
+            "climate_target_temperature_low": self._target_temperature_low,
         }

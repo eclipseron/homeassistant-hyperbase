@@ -69,13 +69,13 @@ class SnapshotRecorder:
             db.commit()
     
     
-    def query_snapshots(self, start_time, end_time):
+    def query_snapshots(self, start_time, end_time, project_id):
         with sqlite3.connect(DEFAULT_SNAPSHOT_PATH) as db:
             cur = db.cursor()
             rows = cur.execute("""
                 SELECT id, connector_entity_id, "timestamp" FROM snapshot
-                WHERE "timestamp" >= ? AND "timestamp" < ?
-                """, (start_time, end_time))
+                WHERE "timestamp" >= ? AND "timestamp" < ? AND project_id = ?
+                """, (start_time, end_time, project_id))
             data = rows.fetchall()
             data_set = [(item[1], item[2]) for item in data]
             data_mapping = {}

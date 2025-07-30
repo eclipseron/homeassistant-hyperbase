@@ -535,6 +535,7 @@ class HyperbaseProjectManager:
         except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
             LOGGER.error(f"({self.entry.data[CONF_PROJECT_NAME]}) Hyperbase connection failed: {exc}")
         except httpx.HTTPStatusError as exc:
+            LOGGER.info(exc.response.json())
             if not is_success:
                 LOGGER.error(f"({self.entry.data[CONF_PROJECT_NAME]}) Failed to create collection: {exc}")
                 return
@@ -584,14 +585,14 @@ class HyperbaseProjectManager:
             
             query = {
                 "orders": [
-                    {"field": "connector_entity", "kind": "asc"},
-                    {"field": "record_date", "kind": "asc"},
+                    {"field": "hass_connector_entity", "kind": "asc"},
+                    {"field": "hass_record_date", "kind": "asc"},
                 ],
                 "filters": [{
                     "op": "AND",
                     "children": [
-                        {"field": "record_date", "op": ">=", "value": start_time},
-                        {"field": "record_date", "op": "<=", "value": end_time},
+                        {"field": "hass_record_date", "op": ">=", "value": start_time},
+                        {"field": "hass_record_date", "op": "<=", "value": end_time},
                     ]
                 }]
             }
@@ -632,16 +633,16 @@ class HyperbaseProjectManager:
             }
             
             query = {
-                "fields": ["record_date", "connector_entity"],
+                "fields": ["hass_record_date", "hass_connector_entity"],
                 "orders": [
-                    {"field": "connector_entity", "kind": "asc"},
-                    {"field": "record_date", "kind": "asc"},
+                    {"field": "hass_connector_entity", "kind": "asc"},
+                    {"field": "hass_record_date", "kind": "asc"},
                 ],
                 "filters": [{
                     "op": "AND",
                     "children": [
-                        {"field": "record_date", "op": ">=", "value": start_time},
-                        {"field": "record_date", "op": "<", "value": end_time},
+                        {"field": "hass_record_date", "op": ">=", "value": start_time},
+                        {"field": "hass_record_date", "op": "<", "value": end_time},
                     ]
                 }]
             }
@@ -664,6 +665,7 @@ class HyperbaseProjectManager:
             LOGGER.error(f"({self.entry.data[CONF_PROJECT_NAME]}) Hyperbase connection failed: {exc}")
             return {"success": False}
         except httpx.HTTPStatusError as exc:
+            LOGGER.info(exc.response.json())
             LOGGER.error(f"({self.entry.data[CONF_PROJECT_NAME]}) Failed to fetch collections: {exc}")
             return {"success": False}
         except Exception as exc:
@@ -786,7 +788,8 @@ class Task:
             entity_entry = er.async_get(entity)
             entity_data = parse_entity_data(entity_entry, state)
             if entity_data is not None:
-                _field_with_data.add(list(entity_data.keys())[0])
+                if len(entity_data.keys()) > 0:
+                    _field_with_data.add(list(entity_data.keys())[0])
                 self.__prev_data = {**self.__prev_data, **entity_data}
                 _data_exist = True
         
@@ -795,9 +798,9 @@ class Task:
             if self.__prev_data is None:
                 return
             else:
-                self.__prev_data["status"] = "device unavailable"
+                self.__prev_data["hass_status"] = "device unavailable"
         else:
-            self.__prev_data["status"] = None
+            self.__prev_data["hass_status"] = None
         
         changed_fields = self.__prev_fields.difference(_field_with_data)
         if len(changed_fields) > 0:
@@ -809,12 +812,12 @@ class Task:
             product_id = device_entry.dict_repr["identifiers"][0][1]
         
         self.__prev_fields = _field_with_data.copy()
-        self.__prev_data["record_date"] = current_time.isoformat()
-        self.__prev_data["area_id"] = device_entry.area_id
-        self.__prev_data["connector_entity"] = self.connector._connector_entity_id
-        self.__prev_data["name_by_user"] = device_entry.name_by_user
-        self.__prev_data["name_default"] = device_entry.name
-        self.__prev_data["product_id"] = product_id
+        self.__prev_data["hass_record_date"] = current_time.isoformat()
+        self.__prev_data["hass_area_id"] = device_entry.area_id
+        self.__prev_data["hass_connector_entity"] = self.connector._connector_entity_id
+        self.__prev_data["hass_name_by_user"] = device_entry.name_by_user
+        self.__prev_data["hass_name_default"] = device_entry.name
+        self.__prev_data["hass_product_id"] = product_id
         
         self.hass.async_create_task(self.async_post_data(
             self.__prev_data,
@@ -831,13 +834,13 @@ class Task:
             product_id = device_entry.dict_repr["identifiers"][0][1]
         
         sent_data = {
-            "area_id": device_entry.area_id,
-            "connector_entity": self.connector._connector_entity_id,
-            "name_by_user": device_entry.name_by_user,
-            "name_default": device_entry.name,
-            "product_id": product_id,
-            "status": "reloaded",
-            "record_date": datetime.now(tz=ZoneInfo("UTC")).isoformat()
+            "hass_area_id": device_entry.area_id,
+            "hass_connector_entity": self.connector._connector_entity_id,
+            "hass_name_by_user": device_entry.name_by_user,
+            "hass_name_default": device_entry.name,
+            "hass_product_id": product_id,
+            "hass_status": "reloaded",
+            "hass_record_date": datetime.now(tz=ZoneInfo("UTC")).isoformat()
         }
         
         for entity in self.connector._listened_entities:
@@ -866,7 +869,7 @@ class Task:
                 "data": payload,
             })
         
-        timestamp = datetime.fromisoformat(payload.get("record_date"))
+        timestamp = datetime.fromisoformat(payload.get("hass_record_date"))
         _timestamp = timestamp.strftime('%Y-%m-%dT%H:%M:%S.%fZ')
         self.snapshot_buffer({
             "timestamp": _timestamp,
@@ -988,7 +991,8 @@ class HyperbaseTaskManager:
         _set, _mapping = await self.hass.async_add_executor_job(
             self.recorder.query_snapshots,
             start_time.isoformat(),
-            end_time.isoformat())
+            end_time.isoformat(),
+            self.project_manager.project_id)
         
         # prevent calling API if there is no collected data within given time range
         if len(_set) < 0:
@@ -1015,7 +1019,7 @@ class HyperbaseTaskManager:
             if res.get("count") < 1:
                 continue
             for entry in res.get("data"):
-                hyperbase_data_set.add((entry.get("connector_entity"), entry.get("record_date")))
+                hyperbase_data_set.add((entry.get("hass_connector_entity"), entry.get("hass_record_date")))
         
         if not is_success:
             await self.hass.async_add_executor_job(

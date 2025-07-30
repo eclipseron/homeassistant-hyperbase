@@ -1,6 +1,6 @@
 class LightColumns:
     def __init__(self):
-        self.__columns = {
+        self._columns = {
             "light_brightness": {"kind": "int", "required": False},
             "light_color_temp_kelvin": {"kind": "int", "required": False},
             "light_hue": {"kind": "double", "required": False},
@@ -16,7 +16,7 @@ class LightColumns:
     
     @property
     def schema(self):
-        return self.__columns
+        return self._columns
 
 
 class LightEntityData:
@@ -33,30 +33,30 @@ class LightEntityData:
         x_color: float | None = None,
         y_color: float | None = None
         ):
-        self.__state_value = state_value
-        self.__brightness = brightness
-        self.__color_temp_kelvin = color_temp_kelvin
-        self.__hue = hue
-        self.__saturation = saturation
-        self.__color_temp = color_temp
-        self.__red = red
-        self.__green = green
-        self.__blue = blue
-        self.__x_color = x_color
-        self.__y_color = y_color
+        self._state_value = state_value
+        self._brightness = brightness
+        self._color_temp_kelvin = color_temp_kelvin
+        self._hue = hue
+        self._saturation = saturation
+        self._color_temp = color_temp
+        self._red = red
+        self._green = green
+        self._blue = blue
+        self._x_color = x_color
+        self._y_color = y_color
     
     @property
     def data(self):
         return {
-            "light_brightness": self.__brightness,
-            "light_color_temp_kelvin": self.__color_temp_kelvin,
-            "light_hue": self.__hue,
-            "light_saturation": self.__saturation,
-            "light_is_on": self.__state_value,
-            "light_color_temp": self.__color_temp,
-            "light_red": self.__red,
-            "light_green": self.__green,
-            "light_blue": self.__blue,
-            "light_x_color": self.__x_color,
-            "light_y_color": self.__y_color,
+            "light_brightness": self._brightness,
+            "light_color_temp_kelvin": self._color_temp_kelvin,
+            "light_hue": self._hue,
+            "light_saturation": self._saturation,
+            "light_is_on": self._state_value,
+            "light_color_temp": self._color_temp,
+            "light_red": self._red,
+            "light_green": self._green,
+            "light_blue": self._blue,
+            "light_x_color": self._x_color,
+            "light_y_color": self._y_color,
         }

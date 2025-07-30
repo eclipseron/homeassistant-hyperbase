@@ -1,5 +1,3 @@
-from typing import Any
-
 class CameraColumns:
     def __init__(self):
         self.__columns = {
@@ -12,11 +10,9 @@ class CameraColumns:
 
 
 class CameraEntityData:
-    def __init__(self, state_value: Any | None = None):
+    def __init__(self, state_value: str | None = None):
         self.__state_value = state_value
     
     @property
     def data(self):
-        if self.__state_value == "unknown":
-            return {"camera": None}
         return {"camera": self.__state_value}

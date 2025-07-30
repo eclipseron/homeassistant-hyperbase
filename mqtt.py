@@ -40,7 +40,6 @@ class MQTT:
 
         self._mqttc.on_connect = self._mqtt_on_connect
         self._mqttc.on_disconnect = self._mqtt_on_disconnect
-        self._mqttc.on_publish = self._mqtt_on_publish
 
     async def async_publish(
         self, topic: str=None, payload: mqtt.PayloadType=None, qos: int=None, retain: bool=None
@@ -99,11 +98,3 @@ class MQTT:
         self.connected = False
         # self._mqttc = None
         # dispatcher_send(self.hass, MQTT_DISCONNECTED)
-
-
-    def _mqtt_on_publish(self, client, userdata, mid, reason_code, properties):
-        pass
-        # LOGGER.info(f"rc: {reason_code}")
-        # if reason_code == mqtt.MQTT_ERR_NO_CONN:
-            # LOGGER.warning("client disconnected")
-            # LOGGER.info(userdata)

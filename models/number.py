@@ -14,7 +14,7 @@ class NumberColumns:
 
 
 
-class NumnberEntityData:
+class NumberEntityData:
     def __init__(self,
         device_class: str | None = None,
         state_value: float | None = None):

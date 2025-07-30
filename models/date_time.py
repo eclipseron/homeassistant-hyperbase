@@ -1,7 +1,7 @@
 class DateTimeColumns:
     def __init__(self):
         self.__columns = {
-            "datetime": {"kind": "timestamp", "required": False},
+            "datetime": {"kind": "string", "required": False},
         }
     @property
     def schema(self):

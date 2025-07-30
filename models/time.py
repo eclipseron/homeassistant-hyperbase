@@ -1,7 +1,7 @@
 class TimeColumns:
     def __init__(self):
         self.__columns = {
-            "date": {"kind": "timestamp", "required": False},
+            "time": {"kind": "string", "required": False},
         }
 
     @property
@@ -15,4 +15,4 @@ class TimeEntityData:
     
     @property
     def data(self):
-        return {"date": self.__state_value}
+        return {"time": self.__state_value}
