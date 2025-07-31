@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 
-from config.custom_components.hyperbase.recorder import SnapshotRecorder
+from .recorder import SnapshotRecorder
 
 
 from .models import DomainDeviceClass, create_schema, parse_entity_data

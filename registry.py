@@ -1,14 +1,13 @@
 import os
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from .const import LOGGER, DOMAIN
 from homeassistant.helpers.json import save_json
 from homeassistant.util.json import load_json_object
 from .util import get_model_identity
 from homeassistant.helpers.device_registry import DeviceEntry, async_get as async_get_device_registry
 
-DEFAULT_CONFIG_PATH = "config/.storage/hyperbase.config"
-# DEFAULT_CONFIG_PATH = ".storage/hyperbase.config"
+# DEFAULT_CONFIG_PATH = "config/.storage/hyperbase.config"
+DEFAULT_CONFIG_PATH = ".storage/hyperbase.config"
 
 
 async def async_get_hyperbase_registry(hass: HomeAssistant):

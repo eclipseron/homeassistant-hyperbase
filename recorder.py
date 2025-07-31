@@ -2,8 +2,8 @@ from datetime import datetime, timedelta
 import sqlite3
 from homeassistant.core import HomeAssistant
 
-DEFAULT_SNAPSHOT_PATH = "config/.storage/hyperbase-snapshot.db"
-# DEFAULT_SNAPSHOT_PATH = ".storage/hyperbase-snapshot.db"
+# DEFAULT_SNAPSHOT_PATH = "config/.storage/hyperbase-snapshot.db"
+DEFAULT_SNAPSHOT_PATH = ".storage/hyperbase-snapshot.db"
 
 class FailedSnapshot:
     def __init__(self, id, start_time, end_time):

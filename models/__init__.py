@@ -1,23 +1,8 @@
 from typing import Any
 
-from attr import attributes
 from homeassistant.core import State
 from homeassistant.helpers.entity_registry import RegistryEntry
 from homeassistant.const import STATE_ON
-
-from homeassistant.components.air_quality import (
-    ATTR_AQI,
-    ATTR_CO,
-    ATTR_CO2,
-    ATTR_N2O,
-    ATTR_NO,
-    ATTR_NO2,
-    ATTR_OZONE,
-    ATTR_PM_0_1,
-    ATTR_PM_2_5,
-    ATTR_PM_10,
-    ATTR_SO2
-)
 
 from .air_quality import *
 from .alarm import *
@@ -205,6 +190,11 @@ def parse_entity_data(entity_entry: RegistryEntry, state: State):
     
     match entity_entry.domain:
         case Platform.AIR_QUALITY:
+            from homeassistant.components.air_quality import (
+                ATTR_AQI, ATTR_CO, ATTR_CO2, ATTR_N2O, ATTR_NO,
+                ATTR_NO2, ATTR_OZONE, ATTR_PM_0_1, ATTR_PM_2_5, ATTR_PM_10,
+                ATTR_SO2
+            )
             
             airq = AirQEntityData(
                 air_quality_index=state.attributes.get(ATTR_AQI),
