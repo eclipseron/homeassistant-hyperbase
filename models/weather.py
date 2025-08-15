@@ -1,7 +1,7 @@
 class WeatherColumns:
     def __init__(self):
         self.__columns = {
-            "weather_cloud_coverage": {"kind": "integer", "required": False},
+            "weather_cloud_coverage": {"kind": "int", "required": False},
             "weather_condition": {"kind": "string", "required": False},
             "weather_humidity": {"kind": "double", "required": False},
             "weather_feels_like_temperature": {"kind": "double", "required": False},
