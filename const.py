@@ -1,4 +1,4 @@
-
+from pathlib import Path
 import logging
 
 from homeassistant.util.hass_dict import HassKey
@@ -31,3 +31,9 @@ HYPERBASE_RESPONSE_MSG = "msg"
 
 MQTT_CONNECTED = "hyperbase_mqtt_connected"
 MQTT_DISCONNECTED = "hyperbase_mqtt_disconnected"
+
+def get_storage_directory():
+    dir = "config/.storage"
+    if Path.cwd() == "/config":
+        dir = ".storage"
+    return dir

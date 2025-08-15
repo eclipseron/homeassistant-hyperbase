@@ -3,6 +3,7 @@ from datetime import timedelta, datetime
 from io import BytesIO
 from typing import Any
 from zoneinfo import ZoneInfo
+from dateutil import parser
 
 import httpx
 
@@ -76,7 +77,6 @@ class HyperbaseCoordinator:
 
 
     async def async_startup(self):
-        await self.reload_listened_devices()
         model_domains_map = await self.__async_verify_device_models()
         LOGGER.info(f"({self._project_name}) Startup: Listened devices loaded")
         succeed = await self.manager.async_revalidate_collections(model_domains_map)
@@ -1019,7 +1019,8 @@ class HyperbaseTaskManager:
             if res.get("count") < 1:
                 continue
             for entry in res.get("data"):
-                hyperbase_data_set.add((entry.get("hass_connector_entity"), entry.get("hass_record_date")))
+                hyperbase_data_set.add((entry.get("hass_connector_entity"),
+                    parser.isoparse(entry.get("hass_record_date")).replace(microsecond=0)))
         
         if not is_success:
             await self.hass.async_add_executor_job(
@@ -1028,9 +1029,9 @@ class HyperbaseTaskManager:
                 end_time.isoformat())
             return is_success
         
-        
         _set = set(_set)
         _set.difference_update(hyperbase_data_set)
+        
         if len(_set) > 0:
             snapshot_ids = []
             for item in _set:

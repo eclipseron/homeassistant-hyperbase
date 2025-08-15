@@ -1,9 +1,12 @@
 from datetime import datetime, timedelta
 import sqlite3
-from homeassistant.core import HomeAssistant
 
-# DEFAULT_SNAPSHOT_PATH = "config/.storage/hyperbase-snapshot.db"
-DEFAULT_SNAPSHOT_PATH = ".storage/hyperbase-snapshot.db"
+from dateutil import parser
+from homeassistant.core import HomeAssistant
+from pathlib import Path
+from .const import get_storage_directory
+
+DEFAULT_SNAPSHOT_PATH = get_storage_directory() + "/hyperbase-snapshot.db"
 
 class FailedSnapshot:
     def __init__(self, id, start_time, end_time):
@@ -77,10 +80,11 @@ class SnapshotRecorder:
                 WHERE "timestamp" >= ? AND "timestamp" < ? AND project_id = ?
                 """, (start_time, end_time, project_id))
             data = rows.fetchall()
-            data_set = [(item[1], item[2]) for item in data]
+            
+            data_set = [(item[1], parser.isoparse(item[2]).replace(microsecond=0)) for item in data]
             data_mapping = {}
             for item in data:
-                data_mapping[f"{item[1]}{item[2]}"] = item[0]
+                data_mapping[f"{item[1]}{parser.isoparse(item[2]).replace(microsecond=0)}"] = item[0]
             return data_set, data_mapping
     
     

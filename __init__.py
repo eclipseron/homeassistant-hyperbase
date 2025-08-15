@@ -11,15 +11,17 @@ configuration.yaml file.
 hello_world:
 """
 
+from .util import get_model_identity
 from .csv_download import CSVDownloadView
 from .recorder import SnapshotRecorder
 from .registry import remove_registry
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.typing import ConfigType
-from .const import CONF_BUCKET_ID, CONF_MQTT_ADDRESS, CONF_MQTT_PORT, CONF_MQTT_TOPIC, CONF_PROJECT_ID, CONF_PROJECT_NAME, CONF_SERIAL_NUMBER, CONF_USER_COLLECTION_ID, CONF_USER_ID, DOMAIN, HYPERBASE_CONFIG, LOGGER
+from .const import CONF_BUCKET_ID, CONF_MQTT_ADDRESS, CONF_MQTT_PORT, CONF_MQTT_TOPIC, CONF_PROJECT_ID, CONF_PROJECT_NAME, CONF_USER_COLLECTION_ID, CONF_USER_ID, DOMAIN, HYPERBASE_CONFIG, LOGGER
 from .common import HyperbaseCoordinator
 from homeassistant.helpers.device_registry import async_get as async_get_device_registry
+from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 
 
 HyperbaseConfigEntry = ConfigEntry["HyperbaseCoordinator"]
@@ -35,7 +37,8 @@ async def async_setup_entry(
         manufacturer="Hyperbase",
         identifiers={("hyperbase", entry.data[CONF_PROJECT_ID])},
         name=entry.data[CONF_PROJECT_NAME],
-        model="Hyperbase Home Assistant Connector",
+        model="Hyperbase Connector for Home Assistant",
+        entry_type="service",
     )
     
     mqtt_address = entry.data[CONF_MQTT_ADDRESS]
@@ -62,6 +65,23 @@ async def async_setup_entry(
         user_id,
         user_collection_id,
     )
+    connectors = await entry.runtime_data.reload_listened_devices()
+    er = async_get_entity_registry(hass)
+    for connector in connectors:
+        stripped_domain = connector._connector_entity_id.split(".")[1]
+        unique_id = stripped_domain.removeprefix("hyperbase_")
+        
+        entity = er.async_get_or_create(
+            device_id=hyperbase.id,
+            domain="event",
+            platform="hyperbase",
+            unique_id=unique_id,
+            has_entity_name=True,
+            config_entry=entry,
+            original_name=get_model_identity(connector._listened_device)
+        )
+        entity.write_unavailable_state(hass)
+        
     is_succeed = await entry.runtime_data.async_startup()
     
     hass.http.register_view(CSVDownloadView(hass))

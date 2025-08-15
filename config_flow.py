@@ -1,4 +1,3 @@
-import csv
 from dataclasses import dataclass
 from datetime import datetime
 from urllib.parse import quote
@@ -154,6 +153,20 @@ async def async_create_bucket(hass: HomeAssistant, project_id: str, auth_token: 
         }
         
         client = get_async_client(hass, verify_ssl=False)
+        
+        buckets_res = await client.get(
+                f"{base_url}/api/rest/project/{project_id}/buckets",
+                headers=headers,
+            )
+        buckets_res.raise_for_status()
+        buckets_data = buckets_res.json().get("data", [])
+        
+        for _bucket in buckets_data:
+            token_name = _bucket.get("name", "")
+            if token_name == "HA Retries":
+                return _bucket.get("id")
+        
+        
         res = await client.post(
             f"{base_url}/api/rest/project/{project_id}/bucket",
             json=req,
@@ -180,7 +193,21 @@ def create_api_token(project_id: str, auth_token: str, bucket_id: str,base_url):
             "Accept": "application/json",
         }
         
+        
         with httpx.Client(verify=False, headers=headers) as client:
+            
+            tokens_res = client.get(
+                f"{base_url}/api/rest/project/{project_id}/tokens",
+            )
+            tokens_res.raise_for_status()
+            tokens_data = tokens_res.json().get("data", [])
+            
+            for _token in tokens_data:
+                token_name = _token.get("name", "")
+                if token_name == "HA Access Token":
+                    return _token.get("id")
+            
+            
             res = client.post(
                 f"{base_url}/api/rest/project/{project_id}/token",
                 json={
@@ -729,19 +756,20 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
                     if input_key == "poll_time_s" or input_key == "add_next" or input_key == "connector_entity":
                         continue
                     listened_entities.append(user_input.get(input_key))
-                _entity = er.async_get_entity_id("notify", "hyperbase", user_input.get("connector_entity"))
+                _entity = er.async_get_entity_id("event", "hyperbase", user_input.get("connector_entity"))
                 if _entity is not None:
                     raise ConnectorEntityExists
                 
                 entry = er.async_get_or_create(
                         device_id=self.config_entry.runtime_data.hyperbase_device_id,
-                        domain="notify",
+                        domain="event",
                         platform="hyperbase",
-                        unique_id=f"{user_input.get("connector_entity")}_last_sent",
+                        unique_id=user_input.get("connector_entity"),
                         has_entity_name=True,
                         config_entry=self.config_entry,
                         original_name=get_model_identity(registering_device),
                     )
+                
                 
                 connector = HyperbaseConnectorEntry(
                     connector_entity_id=entry.entity_id,

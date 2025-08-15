@@ -260,7 +260,7 @@ def parse_entity_data(entity_entry: RegistryEntry, state: State):
         
         case Platform.COVER:
             from homeassistant.components.cover import CoverState
-            cover = CoverEntityData(state_value = state.state == CoverState.CLOSED)
+            cover = CoverEntityData(device_class, state_value = state.state == CoverState.CLOSED)
             return cover.data
         
         case Platform.DATETIME:

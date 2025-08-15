@@ -6,7 +6,7 @@ class CoverColumns:
                 self.__columns[f"cover_is_closed"] = {"kind": "boolean", "required": False}
                 continue
             else:
-                self.__columns[f"sensor__{dc}_is_closed"] = {"kind": "boolean", "required": False}
+                self.__columns[f"cover__{dc}_is_closed"] = {"kind": "boolean", "required": False}
             
     @property
     def schema(self):
@@ -21,6 +21,6 @@ class CoverEntityData:
     @property
     def data(self):
         if self.__device_class is not None:
-            return {f"sensor__{self.__device_class}_is_closed": self.__state_value}
+            return {f"cover__{self.__device_class}_is_closed": self.__state_value}
         else:
             return {f"cover_is_closed": self.__state_value}
