@@ -16,6 +16,7 @@ class MQTT:
     def __init__(
         self,
         hass: HomeAssistant,
+        user_id: str,
         host: str="localhost",
         port: int=1883,
     ) -> None:
@@ -23,6 +24,7 @@ class MQTT:
         self.hass = hass
         self.host = host
         self.port = port
+        self.client_id = f"hass_{user_id}"
         self.connected = False
         self._mqttc: mqtt.Client = None
         self._paho_lock = asyncio.Lock()
@@ -35,7 +37,7 @@ class MQTT:
         self._mqttc = mqtt.Client(
             callback_api_version=CallbackAPIVersion.VERSION2,
             protocol=proto,
-            client_id="hass"
+            client_id=self.client_id
             )
 
         self._mqttc.on_connect = self._mqtt_on_connect

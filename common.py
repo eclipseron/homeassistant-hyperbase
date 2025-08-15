@@ -62,6 +62,7 @@ class HyperbaseCoordinator:
         
         self.mqtt_client = MQTT(
             hass,
+            user_id,
             hyperbase_mqtt_host,
             hyperbase_mqtt_port,
         )
