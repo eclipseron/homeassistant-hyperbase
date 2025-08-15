@@ -34,6 +34,6 @@ MQTT_DISCONNECTED = "hyperbase_mqtt_disconnected"
 
 def get_storage_directory():
     dir = "config/.storage"
-    if Path.cwd() == "/config":
+    if Path.cwd() == Path("/config"):
         dir = ".storage"
     return dir
