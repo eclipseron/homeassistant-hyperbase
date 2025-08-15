@@ -8,6 +8,7 @@ class WeatherColumns:
             "weather_dew_point": {"kind": "double", "required": False},
             "weather_pressure": {"kind": "double", "required": False},
             "weather_temperature": {"kind": "double", "required": False},
+            "weather_uv_index": {"kind": "double", "required": False},
             "weather_visibility": {"kind": "double", "required": False},
             "weather_wind_gust_speed": {"kind": "double", "required": False},
             "weather_wind_speed": {"kind": "double", "required": False},
@@ -29,6 +30,7 @@ class WeatherEntityData:
         dew_point: float | None = None,
         pressure: float | None = None,
         temperature: float | None = None,
+        uv_index: float | None = None,
         visibility: float | None = None,
         wind_gust_speed: float | None = None,
         wind_speed: float | None = None,
@@ -42,6 +44,7 @@ class WeatherEntityData:
         self._dew_point = dew_point
         self._pressure = pressure
         self._temperature = temperature
+        self._uv_index = uv_index
         self._visibility = visibility
         self._wind_gust_speed = wind_gust_speed
         self._wind_speed = wind_speed
@@ -58,6 +61,7 @@ class WeatherEntityData:
             "weather_dew_point": self._dew_point,
             "weather_pressure": self._pressure,
             "weather_temperature": self._temperature,
+            "weather_uv_index": self._uv_index,
             "weather_visibility": self._visibility,
             "weather_wind_gust_speed": self._wind_gust_speed,
             "weather_wind_speed": self._wind_speed,

@@ -451,22 +451,33 @@ def parse_entity_data(entity_entry: RegistryEntry, state: State):
                 ATTR_WEATHER_APPARENT_TEMPERATURE, ATTR_WEATHER_DEW_POINT,
                 ATTR_WEATHER_PRESSURE, ATTR_WEATHER_TEMPERATURE,
                 ATTR_WEATHER_VISIBILITY, ATTR_WEATHER_WIND_GUST_SPEED,
-                ATTR_WEATHER_WIND_SPEED, ATTR_WEATHER_OZONE, ATTR_WEATHER_WIND_BEARING
+                ATTR_WEATHER_WIND_SPEED, ATTR_WEATHER_OZONE, ATTR_WEATHER_WIND_BEARING,
+                ATTR_WEATHER_UV_INDEX
             )
             
+            cloud_coverage = state.attributes.get(ATTR_WEATHER_CLOUD_COVERAGE, None)
+            if cloud_coverage is not None:
+                cloud_coverage = int(cloud_coverage)
+            
+            wind_bearing = state.attributes.get(ATTR_WEATHER_WIND_BEARING, None)
+            if wind_bearing is not None:
+                wind_bearing = str(wind_bearing)
+            
+            
             weather = WeatherEntityData(
-                cloud_coverage=state.attributes.get(ATTR_WEATHER_CLOUD_COVERAGE, None),
+                cloud_coverage=cloud_coverage,
                 condition=state.state,
                 humidity=state.attributes.get(ATTR_WEATHER_HUMIDITY ,None),
                 feels_like_temperature=state.attributes.get(ATTR_WEATHER_APPARENT_TEMPERATURE ,None),
                 dew_point=state.attributes.get(ATTR_WEATHER_DEW_POINT ,None),
                 pressure=state.attributes.get(ATTR_WEATHER_PRESSURE ,None),
                 temperature=state.attributes.get(ATTR_WEATHER_TEMPERATURE ,None),
+                uv_index=state.attributes.get(ATTR_WEATHER_UV_INDEX ,None),
                 visibility=state.attributes.get(ATTR_WEATHER_VISIBILITY ,None),
                 wind_gust_speed=state.attributes.get(ATTR_WEATHER_WIND_GUST_SPEED ,None),
                 wind_speed=state.attributes.get(ATTR_WEATHER_WIND_SPEED ,None),
                 ozone=state.attributes.get(ATTR_WEATHER_OZONE ,None),
-                wind_bearing=state.attributes.get(ATTR_WEATHER_WIND_BEARING ,None),
+                wind_bearing=wind_bearing,
             )
             return weather.data
         case _:
