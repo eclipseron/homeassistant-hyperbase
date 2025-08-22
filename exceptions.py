@@ -31,6 +31,9 @@ class HyperbaseHTTPError(HomeAssistantError):
         self.status_code = status_code
 
 
+class FailedConnector(Exception):
+    """Error to indicate failed new connector creation"""
+
 class InvalidConnectorEntity(Exception):
     """Error to indicate invalid hyperbase connector entity name"""
 

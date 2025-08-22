@@ -60,6 +60,7 @@ class SnapshotRecorder:
                 VALUES (?, ?, ?, ?, ?)
                 """, data)
             db.commit()
+            cur.close()
     
     
     def write_fail_snapshot(self, start_time, end_time):
@@ -70,6 +71,7 @@ class SnapshotRecorder:
                 VALUES (?, ?)
                 """, (start_time, end_time))
             db.commit()
+            cur.close()
     
     
     def query_snapshots(self, start_time, end_time, project_id):
@@ -80,7 +82,7 @@ class SnapshotRecorder:
                 WHERE "timestamp" >= ? AND "timestamp" < ? AND project_id = ?
                 """, (start_time, end_time, project_id))
             data = rows.fetchall()
-            
+            cur.close()
             data_set = [(item[1], parser.isoparse(item[2]).replace(microsecond=0)) for item in data]
             data_mapping = {}
             for item in data:
@@ -100,7 +102,7 @@ class SnapshotRecorder:
                 snapshot[FAILED_ID],
                 snapshot[START_TIME],
                 snapshot[END_TIME]) for snapshot in data]
-            
+            cur.close()
             return failed_snapshots
     
     
@@ -110,6 +112,7 @@ class SnapshotRecorder:
             cur.execute("DELETE FROM failed WHERE start_snapshot_time >= ? AND start_snapshot_time <= ?",
                 (first_entry_start_time, last_entry_start_time))
             db.commit()
+            cur.close()
     
     
     def query_snapshots_by_ids(self, id_list: list):
@@ -118,6 +121,7 @@ class SnapshotRecorder:
             cur = db.cursor()
             rows = cur.execute(f"SELECT payload FROM snapshot WHERE {select_query}")
             payloads: list[str] = rows.fetchall()
+            cur.close()
             return payloads
     
     
@@ -127,6 +131,7 @@ class SnapshotRecorder:
             cur.execute("DELETE FROM failed WHERE id = ?",
                 (failed_id, ))
             db.commit()
+            cur.close()
     
     
     def delete_old_snapshots(self):
@@ -137,3 +142,4 @@ class SnapshotRecorder:
             cur.execute("DELETE FROM snapshot WHERE timestamp <= ?",
                 (old_timestamp.isoformat(), ))
             db.commit()
+            cur.close()

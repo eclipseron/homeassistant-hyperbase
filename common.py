@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import dataclass
 from datetime import timedelta, datetime
 from io import BytesIO
 from typing import Any
@@ -17,7 +18,7 @@ from homeassistant.util.json import json_loads
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_time_interval
-from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
+# from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from .mqtt import MQTT
 from .const import (
     CONF_PROJECT_NAME,
@@ -30,6 +31,63 @@ from homeassistant.helpers.device_registry import async_get as async_get_device_
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 from .registry import HyperbaseConnectorEntry, async_get_hyperbase_registry
 from homeassistant.helpers.httpx_client import get_async_client
+
+
+class HyperbaseConnectors:
+    def __init__(self, connectors: list[HyperbaseConnectorEntry] | None = None):
+        self.entries = connectors
+
+
+async def async_verify_device_models(hass: HomeAssistant, connectors: list[HyperbaseConnectorEntry]):
+        """
+        Get each device model and construct mapping for corresponding entity domains.
+        
+        Returns a `dict` with model identities as key and list of DomainDeviceClass.
+        Model identity will be used to create new collection if needed with pattern
+        `hass.<manufacturer> <model identity>`. Model identity can be one of these. Identity priority
+        is aligned with the order.
+        - model name
+        - model id
+        - device name by user
+        - device default name
+        """
+        er = async_get_entity_registry(hass)
+        models: dict[str, dict[str, set]] = {}
+        for connector in connectors:
+            model_identity = connector._collection_name
+            
+            if models.get(model_identity, None) is None:
+                models[model_identity] = {}
+            
+            for listened_entity in connector._listened_entities:
+                entity = er.async_get(listened_entity)
+                if models[model_identity].get(entity.domain, None) is None:
+                    models[model_identity][entity.domain] = set([])
+                
+                if entity.original_device_class is not None:
+                    models[model_identity][entity.domain].add(entity.original_device_class)
+                    continue
+                
+                if entity.translation_key is not None:
+                    models[model_identity][entity.domain].add(entity.translation_key)
+                    continue
+                
+                else:
+                    models[model_identity][entity.domain].add("unknown")
+        
+        model_domains_map: dict[str, list[DomainDeviceClass]] = {}
+        for model_name in models.keys():
+            if model_domains_map.get(model_name, None) is None:
+                model_domains_map[model_name] = []
+            
+            for domain in models[model_name].keys():
+                domain_class = DomainDeviceClass(
+                    domain,
+                    list(models[model_name][domain])
+                )
+                model_domains_map[model_name].append(domain_class)
+        
+        return model_domains_map
 
 
 
@@ -53,7 +111,7 @@ class HyperbaseCoordinator:
         self.unloading = False
         self._project_name = hyperbase_project_name
         
-        self._connectors: list[HyperbaseConnectorEntry] = []
+        self._connectors = HyperbaseConnectors()
         
         self.manager = HyperbaseProjectManager(
             hass,
@@ -70,23 +128,17 @@ class HyperbaseCoordinator:
         
         self.task_manager = HyperbaseTaskManager(
             hass,
+            connectors = self._connectors,
             mqttc = self.mqtt_client,
             mqtt_topic=hyperbase_mqtt_topic,
             project_manager=self.manager,
             user_id=user_id,
             user_collection_id=user_collection_id
         )
-        
-        async_dispatcher_connect(self.hass, "RELOAD_COLLECTIONS", self.async_reload_collections)
     
     
-    async def async_reload_collections(self):
-        model_domains_map = await self.__async_verify_device_models()
-        await self.manager.async_revalidate_collections(model_domains_map)
-
-
     async def async_startup(self):
-        model_domains_map = await self.__async_verify_device_models()
+        model_domains_map = await async_verify_device_models(self.hass, self._connectors.entries)
         LOGGER.info(f"({self._project_name}) Startup: Listened devices loaded")
         succeed = await self.manager.async_revalidate_collections(model_domains_map)
         if not succeed:
@@ -105,26 +157,26 @@ class HyperbaseCoordinator:
     
     
     async def __async_startup_load_runtime_tasks(self, _=None):
-        await self.task_manager.async_load_runtime_tasks(self._connectors)
+        await self.task_manager.async_load_runtime_tasks(self._connectors.entries)
         LOGGER.info(f"({self._project_name}) Running: Data logging is active. Please check your hyperbase instance to verify.")
     
     
     async def reload_listened_devices(self) -> list[HyperbaseConnectorEntry]:
         """Reload listened devices and return updated list of HyperbaseConnectorEntry to be used later"""
-        self._connectors = []
+        self._connectors.entries = []
         
         hyp = await async_get_hyperbase_registry(self.hass)
         _conn = hyp.get_connector_entries_for_project(self.manager.project_id)
-        self._connectors = _conn.copy()
+        self._connectors.entries = _conn.copy()
 
-        return self._connectors
+        return self._connectors.entries
 
 
     async def async_add_new_listened_device(self, connector: HyperbaseConnectorEntry):
         """
         Add new listened device into the runtime.
         """
-        self._connectors.append(connector)
+        self._connectors.entries.append(connector)
         if connector._collection_name is None:
             raise Exception("device model identity is not exist")
         model_identity = connector._collection_name
@@ -257,57 +309,6 @@ class HyperbaseCoordinator:
         cancel() # terminate all tasks
         if task_info.get(key) is not None:
             del task_info[key]
-
-    async def __async_verify_device_models(self):
-        """
-        Get each device model and construct mapping for corresponding entity domains.
-        
-        Returns a `dict` with model identities as key and list of DomainDeviceClass.
-        Model identity will be used to create new collection if needed with pattern
-        `hass.<manufacturer> <model identity>`. Model identity can be one of these. Identity priority
-        is aligned with the order.
-        - model name
-        - model id
-        - device name by user
-        - device default name
-        """
-        er = async_get_entity_registry(self.hass)
-        models: dict[str, dict[str, set]] = {}
-        for connector in self._connectors:
-            model_identity = connector._collection_name
-            
-            if models.get(model_identity, None) is None:
-                models[model_identity] = {}
-            
-            for listened_entity in connector._listened_entities:
-                entity = er.async_get(listened_entity)
-                if models[model_identity].get(entity.domain, None) is None:
-                    models[model_identity][entity.domain] = set([])
-                
-                if entity.original_device_class is not None:
-                    models[model_identity][entity.domain].add(entity.original_device_class)
-                    continue
-                
-                if entity.translation_key is not None:
-                    models[model_identity][entity.domain].add(entity.translation_key)
-                    continue
-                
-                else:
-                    models[model_identity][entity.domain].add("unknown")
-        
-        model_domains_map: dict[str, list[DomainDeviceClass]] = {}
-        for model_name in models.keys():
-            if model_domains_map.get(model_name, None) is None:
-                model_domains_map[model_name] = []
-            
-            for domain in models[model_name].keys():
-                domain_class = DomainDeviceClass(
-                    domain,
-                    list(models[model_name][domain])
-                )
-                model_domains_map[model_name].append(domain_class)
-        
-        return model_domains_map
 
 
     async def connect(self):
@@ -573,7 +574,12 @@ class HyperbaseProjectManager:
                     headers=headers
                 )
             response.raise_for_status()
-            LOGGER.info(f"({self.entry.data[CONF_PROJECT_NAME]}) Inconsistent data stored.")
+            await self.hass.services.async_call("persistent_notification", "create",
+                    service_data={
+                        "message": "Found inconsistent data was recovered. Please check your Hyperbase instance.",
+                        "title": "Hyperbase Data Recovery",
+                        "notification_id": "hyp_recovery",
+                    })
         except (httpx.ConnectTimeout, httpx.ConnectError) as exc:
             LOGGER.error(f"({self.entry.data[CONF_PROJECT_NAME]}) Hyperbase connection failed: {exc}")
         except httpx.HTTPStatusError as exc:
@@ -749,13 +755,11 @@ class Task:
         self,
         hass: HomeAssistant,
         api_token_id: str,
-        collection_id: str,
         collection_name: str,
         connector: HyperbaseConnectorEntry,
         mqtt_client: MQTT,
         mqtt_topic: str,
         project_id: str,
-        project_name: str,
         user_id: str,
         user_collection_id: str,
         callbacks: dict[str, Any] = None,
@@ -767,14 +771,13 @@ class Task:
         self.__prev_data = None
         self.__prev_fields = set([])
         self.__project_id = project_id
-        self.__project_name = project_name
         self.__collection_name = collection_name
-        self.__collection_id = collection_id
         self.__api_token_id = api_token_id
         self._user_id = user_id
         self._user_collection_id = user_collection_id
         
         self.snapshot_buffer = callbacks.get("snapshot_buffer")
+        self.get_collection_id = callbacks.get("get_collection_id")
     
     
     async def async_publish_on_tick(self, current_time: datetime):
@@ -867,9 +870,10 @@ class Task:
     
     
     async def async_post_data(self, payload: dict):
+        
         json_data = json.json_dumps({
                 "project_id": self.__project_id,
-                "collection_id": self.__collection_id,
+                "collection_id": self.get_collection_id(self.__collection_name),
                 "token_id": self.__api_token_id,
                 "user": {
                     "collection_id": self._user_collection_id,
@@ -883,7 +887,7 @@ class Task:
         self.snapshot_buffer({
             "timestamp": _timestamp,
             "connector_entity_id": self.connector._connector_entity_id,
-            "collection_id": self.__collection_id,
+            "collection_id": self.get_collection_id(self.__collection_name),
             "payload": json_data,
         })
         
@@ -911,6 +915,7 @@ class Task:
 class HyperbaseTaskManager:
     def __init__(self,
         hass: HomeAssistant,
+        connectors: HyperbaseConnectors,
         mqttc: MQTT,
         mqtt_topic: str,
         project_manager: HyperbaseProjectManager,
@@ -924,6 +929,7 @@ class HyperbaseTaskManager:
         self._data_collecting_task_info: dict[str, Task] = {}
         self.project_manager = project_manager
         self._mqtt_topic = mqtt_topic
+        self._connectors = connectors
         
         self._user_id = user_id
         self._user_collection_id = user_collection_id
@@ -953,22 +959,26 @@ class HyperbaseTaskManager:
         for connector in connectors:
             self.hass.async_create_task(self.__start_logging(connector))
 
+    
+    def _get_collection_id(self, collection_name: str):
+        return self.project_manager.get_collection_id(collection_name)
 
     async def __start_logging(self, connector: HyperbaseConnectorEntry):
         task = Task(
                 hass=self.hass,
                 api_token_id=self.project_manager.api_token_id,
-                collection_id=self.project_manager.get_collection_id(connector._collection_name),
+                # collection_id=self._get_collection_id(connector._collection_name),
                 collection_name=connector._collection_name,
                 connector=connector,
                 mqtt_client=self.mqttc,
                 mqtt_topic=self._mqtt_topic,
                 project_id=self.project_manager.project_id,
-                project_name=self.project_manager.entry.data[CONF_PROJECT_NAME],
+                # project_name=self.project_manager.entry.data[CONF_PROJECT_NAME],
                 user_id = self._user_id,
                 user_collection_id = self._user_collection_id,
                 callbacks={
                     "snapshot_buffer": self.append_snapshot_buffer,
+                    "get_collection_id": self._get_collection_id,
                 }
             )
         
@@ -1003,6 +1013,8 @@ class HyperbaseTaskManager:
             end_time.isoformat(),
             self.project_manager.project_id)
         
+        
+        await self.hass.services.async_call("recorder", "purge_entities", service_data={"entity_globs": "event.hyperbase_*"})
         # prevent calling API if there is no collected data within given time range
         if len(_set) < 0:
             return
@@ -1011,7 +1023,8 @@ class HyperbaseTaskManager:
         for connector in connectors:
             collection_id = self.project_manager.get_collection_id(connector._collection_name)
             if collection_id is None:
-                async_dispatcher_send(self.hass, "RELOAD_COLLECTIONS")
+                model_domains_map = await async_verify_device_models(self.hass, self._connectors.entries)
+                await self.project_manager.async_revalidate_collections(model_domains_map, await_result=True)
                 collection_id = self.project_manager.get_collection_id(connector._collection_name)
             collection_ids.append(collection_id)
         hyperbase_data_set = set([])
@@ -1034,6 +1047,12 @@ class HyperbaseTaskManager:
                     parser.isoparse(entry.get("hass_record_date")).replace(microsecond=0)))
         
         if not is_success:
+            await self.hass.services.async_call("persistent_notification", "create",
+                    service_data={
+                        "message": "Integration fails to check data consistency. Please check your Hyperbase instance",
+                        "title": "Hyperbase Connection Failure",
+                        "notification_id": "hyp_conn_failure",
+                    })
             await self.hass.async_add_executor_job(
                 self.recorder.write_fail_snapshot,
                 start_time.isoformat(),

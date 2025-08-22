@@ -8,7 +8,7 @@ from paho.mqtt.enums import CallbackAPIVersion, MQTTProtocolVersion
 
 from .util import get_model_identity, is_valid_connector_entity, format_device_name
 
-from .exceptions import ConnectorEntityExists, HyperbaseHTTPError, HyperbaseMQTTConnectionError, HyperbaseRESTConnectivityError, InvalidConnectorEntity
+from .exceptions import ConnectorEntityExists, HyperbaseHTTPError, HyperbaseMQTTConnectionError, HyperbaseRESTConnectivityError, InvalidConnectorEntity, FailedConnector
 
 from .common import HyperbaseConnectorEntry, async_get_hyperbase_registry
 from homeassistant.helpers import selector
@@ -783,6 +783,12 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
                 await hyperbase.async_store_connector_entry(connector)
                 
                 await self.config_entry.runtime_data.async_add_new_listened_device(connector)
+                collection_id = self.config_entry.runtime_data.manager.get_collection_id(connector._collection_name)
+                if collection_id is None:
+                    er.async_remove(entry.entity_id)
+                    await hyperbase.async_delete_connector_entry(connector._connector_entity_id)
+                    self.config_entry.runtime_data._cancel_runtime_task(connector._connector_entity_id)
+                    raise FailedConnector
                 
                 if user_input["add_next"]:
                     return await self.async_step_select_device()
@@ -793,6 +799,8 @@ class HyperbaseOptionsFlowHandler(config_entries.OptionsFlow):
                 )
             except InvalidConnectorEntity:
                 errors["base"] = "invalid_entity"
+            except FailedConnector:
+                errors["base"] = "failed_connector"
             except ConnectorEntityExists:
                 errors["base"] = "entity_exists"
         
