@@ -17,6 +17,7 @@ from homeassistant.util.json import json_loads
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from .mqtt import MQTT
 from .const import (
     CONF_PROJECT_NAME,
@@ -75,6 +76,13 @@ class HyperbaseCoordinator:
             user_id=user_id,
             user_collection_id=user_collection_id
         )
+        
+        async_dispatcher_connect(self.hass, "RELOAD_COLLECTIONS", self.async_reload_collections)
+    
+    
+    async def async_reload_collections(self):
+        model_domains_map = await self.__async_verify_device_models()
+        await self.manager.async_revalidate_collections(model_domains_map)
 
 
     async def async_startup(self):
@@ -319,6 +327,7 @@ class HyperbaseCoordinator:
         for connector_id in tasks.keys():
             task = tasks[connector_id] # terminate all tasks
             task()
+        self.task_manager._shutdown_cancel()
 
 
     @property
@@ -441,7 +450,6 @@ class HyperbaseProjectManager:
                     #retrieve hass.<model identity> value
                     device_model = collection_name.removeprefix("hass.")
                     self.__collections[device_model] = collection.get("id")
-        LOGGER.info(f"({self.entry.data[CONF_PROJECT_NAME]}) collections reloaded")
 
 
     async def __async_create_collection_task(self, entity_domain, schema):
@@ -1002,8 +1010,10 @@ class HyperbaseTaskManager:
         collection_ids = []
         for connector in connectors:
             collection_id = self.project_manager.get_collection_id(connector._collection_name)
+            if collection_id is None:
+                async_dispatcher_send(self.hass, "RELOAD_COLLECTIONS")
+                collection_id = self.project_manager.get_collection_id(connector._collection_name)
             collection_ids.append(collection_id)
-        
         hyperbase_data_set = set([])
         is_success = False
         for collection_id in collection_ids:
