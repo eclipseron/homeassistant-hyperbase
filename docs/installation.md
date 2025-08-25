@@ -23,6 +23,19 @@ You can access the web UI from http://YOUR-IP:8123. Follow the onboarding proces
 
 ## Hyperbase for HA Installation
 
+### Using HACS (recommended)
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=eclipseron&repository=homeassistant-hyperbase&category=integration)
+
+1. Open **HACS** in Home Assistant
+2. Find **"Custom repositories"** in the option
+3. Enter `https://github.com/eclipseron/homeassistant-hyperbase.git`. Choose **"Integration"** for the Type input.
+4. Click **Add**.
+5. Search for **"Hyperbase"** in HACS. Press **Download** and restart your HA.
+6. Go to **Settings > Devices & services > + Add integration**.
+7. Find **"Hyperbase"** and start the integration setup.
+
+### Manual install
+
 Once you have your Home Assistant container running, use this command to access bash from the container. You might use `sudo` if the command not working.
 
 ```bash
