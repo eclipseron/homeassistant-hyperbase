@@ -1,0 +1,6 @@
+* [Introduction](/)
+* [Installation](installation.md)
+* [Start Collecting Device Data](start_collecting_device_data.md)
+* [Update Configuration](update_configuration.md)
+* [Remove Configuration](remove_configuration.md)
+* [Quick Data Export](quick_query.md)
