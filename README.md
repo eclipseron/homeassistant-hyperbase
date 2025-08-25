@@ -58,5 +58,6 @@ You can follow Hyperbase installation guide from [documentation](https://hyperba
 
 
 ## :book: Documentation
-Hyperbase Documentation: https://github.com/HyperbaseApp/hyperbase 
+Hyperbase Documentation: https://github.com/HyperbaseApp/hyperbase
+
 Hyperbase for HA Documentation: https://eclipseron.github.io/homeassistant-hyperbase
