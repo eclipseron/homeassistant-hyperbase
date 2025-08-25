@@ -1,0 +1,16 @@
+.HA_VERSION
+*.yaml
+*.db
+*.log
+*.log.*
+www/
+tts/
+downloads/
+deps/
+.cloud/
+.storage/
+blueprints/
+custom_components/hacs/
+custom_components/localtuya/
+custom_components/xtend_tuya/
+__pycache__
