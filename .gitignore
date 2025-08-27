@@ -1,6 +1,7 @@
 .HA_VERSION
 *.yaml
 *.db
+*.db*
 *.log
 *.log.*
 www/
