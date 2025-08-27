@@ -135,11 +135,13 @@ class SnapshotRecorder:
     
     
     def delete_old_snapshots(self):
-        old_timestamp = datetime.now() - timedelta(days=7)
+        old_timestamp = datetime.now() - timedelta(hours=3)
         
         with sqlite3.connect(DEFAULT_SNAPSHOT_PATH) as db:
             cur = db.cursor()
-            cur.execute("DELETE FROM snapshot WHERE timestamp <= ?",
+            cur.execute("""DELETE FROM snapshot WHERE "timestamp" <= ?""",
+                (old_timestamp.isoformat(), ))
+            cur.execute("DELETE FROM failed WHERE start_snapshot_time <= ?",
                 (old_timestamp.isoformat(), ))
             db.commit()
             cur.close()

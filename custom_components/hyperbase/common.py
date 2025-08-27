@@ -960,9 +960,18 @@ class HyperbaseTaskManager:
                 self._async_check_failed, interval=timedelta(minutes=3))
         )
         
+        self._shutdown_callback.append(
+            async_track_time_interval(self.hass,
+                self._async_delete_old_snapshots, interval=timedelta(hours=3))
+        )
+        
         for connector in connectors:
             self.hass.async_create_task(self.__start_logging(connector))
 
+    
+    async def _async_delete_old_snapshots(self, _=None):
+        await self.hass.async_add_executor_job(self.recorder.delete_old_snapshots)
+    
     
     def _get_collection_id(self, collection_name: str):
         return self.project_manager.get_collection_id(collection_name)
