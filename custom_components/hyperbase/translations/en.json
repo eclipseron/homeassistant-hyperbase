@@ -19,6 +19,20 @@
           "project_id": "Hyperbase Project ID",
           "user_id": "Home Assistant User ID"
         }
+      },
+      "reconfigure": {
+        "title": "Reconfigure Hyperbase Connection",
+        "description": "Hyperbase Base URL uses the address of Hyperbase backend server. Check the configured Hyperbase Server Base URL on Hyperbase UI. \n Please refer to Hyperbase configuration file for the MQTT connection information. For more information: https://hyperbase-book.hilmy.dev/04_features/12_change_server",
+        "data": {
+          "rest_address": "Hyperbase Base URL",
+          "mqtt_address": "MQTT Host IP",
+          "mqtt_port": "MQTT Port",
+          "mqtt_topic": "MQTT Hyperbase Topic",
+          "email": "Hyperbase Admin Email",
+          "password": "Hyperbase Admin Password",
+          "project_id": "Hyperbase Project ID",
+          "user_id": "Home Assistant User ID"
+        }
       }
     },
     "error": {

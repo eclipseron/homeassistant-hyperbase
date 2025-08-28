@@ -118,7 +118,7 @@ class HyperbaseCoordinator:
             hyperbase_project_id,
             bucket_id,
         )
-        
+        LOGGER.info(hyperbase_project_id)
         self.mqtt_client = MQTT(
             hass,
             user_id,
@@ -360,6 +360,7 @@ class HyperbaseProjectManager:
     ):
         """Initialize Hyperbase project manager."""
         self.hass = hass
+        LOGGER.info(hyperbase_project_id)
         self.__hyperbase_project_id = hyperbase_project_id
         self._hyperbase_bucket_id = bucket_id
         self.entry = self.hass.config_entries.async_entry_for_domain_unique_id(DOMAIN, self.__hyperbase_project_id)

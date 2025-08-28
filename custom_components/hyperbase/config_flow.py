@@ -12,7 +12,7 @@ from .exceptions import ConnectorEntityExists, HyperbaseHTTPError, HyperbaseMQTT
 
 from .common import HyperbaseConnectorEntry, async_get_hyperbase_registry
 from homeassistant.helpers import selector
-from homeassistant.helpers.device_registry import async_get as async_get_device_registry
+from homeassistant.helpers.device_registry import async_get as async_get_device_registry, async_entries_for_config_entry
 from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry, async_entries_for_device
 from homeassistant.helpers.httpx_client import get_async_client
 from paho.mqtt import client as mqtt
@@ -445,6 +445,121 @@ class HyperbaseConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
             description_placeholders=placeholders
         )
+    
+    
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None):
+        hb_conf = self.hass.config_entries.async_entries(DOMAIN)[0]
+        errors = {}
+        placeholders = {}
+        
+        if user_input is not None:
+            is_login_success = False
+            is_project_exists = False
+            try:
+                _auth_token = await self.hass.async_add_executor_job(login,
+                    user_input.get(CONF_EMAIL), user_input.get(CONF_PASSWORD),
+                    user_input.get(CONF_REST_ADDRESS))
+                is_login_success = True
+                project = await self.hass.async_add_executor_job(get_hyperbase_project,
+                    user_input.get(CONF_PROJECT_ID),
+                    _auth_token,
+                    user_input.get(CONF_REST_ADDRESS)
+                )
+                _project_meta = {
+                    CONF_PROJECT_ID: user_input.get(CONF_PROJECT_ID),
+                    CONF_PROJECT_NAME: project.get(CONF_NAME)
+                }
+                await self.async_set_unique_id(_project_meta.get(CONF_PROJECT_ID))
+                
+                is_project_exists = True
+                
+                user_collection = await self.hass.async_add_executor_job(validate_user_account,
+                    _project_meta.get(CONF_PROJECT_ID),
+                    user_input.get(CONF_USER_ID),
+                    _auth_token,
+                    user_input.get(CONF_REST_ADDRESS))
+                
+                bucket_id = await async_create_bucket(
+                    self.hass, _project_meta.get(CONF_PROJECT_ID),
+                    _auth_token, user_input.get(CONF_REST_ADDRESS))
+                
+                token_id = await self.hass.async_add_executor_job(create_api_token,
+                    _project_meta.get(CONF_PROJECT_ID),
+                    _auth_token,
+                    bucket_id,
+                    user_input.get(CONF_REST_ADDRESS))
+                
+                dr = async_get_device_registry(self.hass)
+                er = async_get_entity_registry(self.hass)
+                device_entries = async_entries_for_config_entry(dr, hb_conf.entry_id)
+                for device in device_entries:
+                    entity_entries = async_entries_for_device(er, device.id)
+                    for entity in entity_entries:
+                        er.async_remove(entity.entity_id)
+                    dr.async_remove_device(device.id)
+                
+                return self.async_update_reload_and_abort(
+                    self._get_reconfigure_entry(),
+                    title=_project_meta.get(CONF_PROJECT_NAME),
+                    unique_id=_project_meta.get(CONF_PROJECT_ID),
+                    data_updates={
+                        CONF_BASE_URL: user_input.get(CONF_REST_ADDRESS),
+                        CONF_MQTT_ADDRESS: user_input.get(CONF_MQTT_ADDRESS),
+                        CONF_MQTT_PORT: user_input.get(CONF_MQTT_PORT),
+                        CONF_MQTT_TOPIC: user_input.get(CONF_MQTT_TOPIC),
+                        CONF_AUTH_TOKEN: _auth_token,
+                        CONF_PROJECT_ID: _project_meta.get(CONF_PROJECT_ID),
+                        CONF_PROJECT_NAME: _project_meta.get(CONF_PROJECT_NAME),
+                        CONF_API_TOKEN: token_id,
+                        CONF_USER_ID: user_collection.get("user_id"),
+                        CONF_USER_COLLECTION_ID: user_collection.get("collection_id"),
+                        CONF_BUCKET_ID: bucket_id,
+                    },
+                )
+            except HyperbaseRESTConnectivityError as exc:
+                errors["base"] = "network_error"
+                placeholders = {
+                    HYPERBASE_RESPONSE_MSG: exc.args,
+                    "network_type": "REST"
+                }
+            except HyperbaseHTTPError as exc:
+                if not is_login_success:
+                    errors["base"] = "login_error"
+                    placeholders = {
+                        HYPERBASE_RESPONSE_CODE: exc.status_code,
+                        HYPERBASE_RESPONSE_MSG: exc.args,
+                    }
+                elif not is_project_exists:
+                    errors["base"] = "project_error"
+                    placeholders = {
+                        HYPERBASE_RESPONSE_CODE: exc.status_code,
+                        HYPERBASE_RESPONSE_MSG: exc.args,
+                    }
+                else:
+                    errors["base"] = "token_error"
+                    placeholders = {
+                        HYPERBASE_RESPONSE_CODE: exc.status_code,
+                        HYPERBASE_RESPONSE_MSG: exc.args,
+                    }
+        else:
+            user_input = {}
+        
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=vol.Schema({
+                vol.Required(CONF_REST_ADDRESS, default=user_input.get(CONF_REST_ADDRESS, hb_conf.data.get(CONF_BASE_URL))): str,
+                vol.Required(CONF_MQTT_ADDRESS, default=user_input.get(CONF_MQTT_ADDRESS, hb_conf.data.get(CONF_MQTT_ADDRESS))): str,
+                vol.Required(CONF_MQTT_PORT, default=user_input.get(CONF_MQTT_PORT, hb_conf.data.get(CONF_MQTT_PORT))): cv.port,
+                vol.Required(CONF_MQTT_TOPIC, default=user_input.get(CONF_MQTT_TOPIC, hb_conf.data.get(CONF_MQTT_TOPIC))): str,
+                vol.Required(CONF_EMAIL, default=user_input.get(CONF_EMAIL, "")): str,
+                vol.Required(CONF_PASSWORD, default=user_input.get(CONF_PASSWORD, "")): str,
+                vol.Required(CONF_PROJECT_ID, default=user_input.get(CONF_PROJECT_ID, hb_conf.data.get(CONF_PROJECT_ID))): str,
+                vol.Required(CONF_USER_ID, default=user_input.get(CONF_USER_ID, hb_conf.data.get(CONF_USER_ID))): str,
+            }),
+            errors=errors,
+            description_placeholders=placeholders,
+        )
+        
 
 
 CONF_ADD_DEVICE = "add_device"
