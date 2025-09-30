@@ -113,12 +113,11 @@ class HyperbaseCoordinator:
         
         self._connectors = HyperbaseConnectors()
         
-        self.manager = HyperbaseProjectManager(
+        self.manager = HyperbaseProjects(
             hass,
             hyperbase_project_id,
             bucket_id,
         )
-        LOGGER.info(hyperbase_project_id)
         self.mqtt_client = MQTT(
             hass,
             user_id,
@@ -126,7 +125,7 @@ class HyperbaseCoordinator:
             hyperbase_mqtt_port,
         )
         
-        self.task_manager = HyperbaseTaskManager(
+        self.task_manager = HyperbaseTask(
             hass,
             connectors = self._connectors,
             mqttc = self.mqtt_client,
@@ -351,7 +350,7 @@ class HyperbaseCollection:
 
 
 
-class HyperbaseProjectManager:
+class HyperbaseProjects:
     def __init__(
         self,
         hass: HomeAssistant,
@@ -917,13 +916,13 @@ class Task:
         )
 
 
-class HyperbaseTaskManager:
+class HyperbaseTask:
     def __init__(self,
         hass: HomeAssistant,
         connectors: HyperbaseConnectors,
         mqttc: MQTT,
         mqtt_topic: str,
-        project_manager: HyperbaseProjectManager,
+        project_manager: HyperbaseProjects,
         user_id: str,
         user_collection_id: str,
         ):
